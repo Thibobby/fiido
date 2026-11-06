@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fiido Explorer</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--muted:#6b6b66;--accent:#0f766e;--line:#e4e2dc;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1f1f1d;--ink:#f1efe8;--muted:#9a988f;--accent:#2dd4bf;--line:#33322e;--warn:#f59e0b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:720px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:8px 0 4px}
+.sub{color:var(--muted);margin:0 0 16px;font-size:14px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+button{font:inherit;padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.rec{background:#b91c1c;border-color:#b91c1c;color:#fff}
+button:disabled{opacity:.45;cursor:default}
+#status{font-size:14px;color:var(--muted);margin-bottom:12px}
+#status.ok{color:var(--accent)}#status.err{color:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.tile .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.tile .v{font-size:26px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+.tile .u{font-size:14px;color:var(--muted);font-weight:400;margin-left:3px}
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+summary{cursor:pointer;font-weight:600}
+pre{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;margin:8px 0 0;max-height:320px;overflow:auto}
+.note{font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Fiido Explorer</h1>
+  <p class="sub">Étape 1 — lecture seule. Cette page ne modifie aucun réglage du vélo.</p>
+
+  <div class="bar">
+    <button id="btnConnect" class="primary">Se connecter au vélo</button>
+    <button id="btnDisconnect" disabled>Déconnecter</button>
+    <button id="btnRec" disabled>Démarrer l'enregistrement</button>
+    <button id="btnCsv" disabled>Exporter CSV</button>
+  </div>
+  <div id="status">Non connecté.</div>
+
+  <div class="grid" id="tiles"></div>
+
+  <details open><summary>Trames brutes (dernière reçue de chaque type)</summary><pre id="raw">—</pre></details>
+  <details><summary>Journal technique</summary><pre id="log"></pre></details>
+
+  <p class="note">Fermez l'application Fiido officielle avant de vous connecter : le vélo n'accepte qu'une connexion à la fois. Déconnectez-vous à la fin pour que le vélo puisse se mettre en veille.</p>
+</main>
+
+<script>
+// ---------- Identifiants Bluetooth du vélo ----------
+const SVC = '00010203-0405-0607-0809-0a0b0c0dffe0';
+const RX  = '00010203-0405-0607-0809-0a0b0c0dffe1'; // le vélo nous parle ici
+const TX  = '00010203-0405-0607-0809-0a0b0c0dffe2'; // on parle au vélo ici
+
+// ---------- Demandes de lecture ("polls") ----------
+// Format : 'F' 'd' 0x55 longueur adresse CRC
+function poll(len, addr){ const f=[0x46,0x64,0x55,len,addr]; f.push(xor(f)); return new Uint8Array(f); }
+const HANDSHAKE = poll(0x0D,0x0D);
+const ROTATION = [
+  {name:'STATS',   frame: poll(0x35,0x05)},
+  {name:'BATTERY', frame: poll(0x0D,0x7B)},
+  {name:'MOTOR',   frame: poll(0x0C,0x96)},
+  {name:'ENERGY',  frame: poll(0x0C,0xC8)},
+];
+const NAMES = {0x0D:'HANDSHAKE',0x05:'STATS',0x7B:'BATTERY',0x96:'MOTOR',0xC8:'ENERGY'};
+
+// ---------- Affichage ----------
+const TILES = [
+  ['speed','Vitesse','km/h'],['soc','Batterie','%'],['voltage','Tension','V'],
+  ['trip','Trajet','km'],['total','Compteur (ODO)','km'],['capacity','Capacité','Ah'],
+  ['gear','Assistance',''],['motor','Système',''],['light','Éclairage',''],
+  ['mtemp','Temp. moteur','°C'],['uptime','Allumé depuis',''],['limit','Limiteur',''],
+  ['torque','Couple (brut)',''],['rpm','Cadence (brut)',''],
+  ['wheel','Roue','pouces'],['mpower','Moteur nominal','W'],
+];
+const GEARS3 = ['Arrêt','Éco','Sport','Turbo'];
+const state = {};
+const tilesEl = document.getElementById('tiles');
+tilesEl.innerHTML = TILES.map(([k,l,u])=>`<div class="tile"><div class="k">${l}</div><div class="v"><span id="v_${k}">—</span><span class="u">${u}</span></div></div>`).join('');
+function show(k,v){ state[k]=v; const el=document.getElementById('v_'+k); if(el) el.textContent=v; }
+
+const $ = id => document.getElementById(id);
+const hex = a => Array.from(a,b=>b.toString(16).padStart(2,'0')).join(' ');
+function xor(a){ let x=0; for(const b of a) x^=b; return x; }
+function log(m){ const t=new Date().toLocaleTimeString(); $('log').textContent = `[${t}] ${m}\n` + $('log').textContent.slice(0,8000); }
+function setStatus(m,cls=''){ $('status').textContent=m; $('status').className=cls; }
+
+// ---------- Connexion ----------
+let device=null, tx=null, rx=null, timer=null, busy=false, buf=[];
+const rawFrames = {};
+
+$('btnConnect').onclick = async () => {
+  if (!navigator.bluetooth){ setStatus("Ce navigateur ne gère pas le Bluetooth web. Utilisez Chrome (Android/PC) ou Edge (PC).",'err'); return; }
+  try{
+    setStatus('Recherche du vélo…');
+    device = await navigator.bluetooth.requestDevice({
+      filters:[{namePrefix:'Fiido'}],
+      optionalServices:[SVC]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    setStatus('Connexion à '+device.name+'…');
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    rx = await svc.getCharacteristic(RX);
+    tx = await svc.getCharacteristic(TX);
+    await rx.startNotifications();
+    rx.addEventListener('characteristicvaluechanged', onNotify);
+    log('Connecté à '+device.name);
+    await send(HANDSHAKE); await sleep(300);
+    timer = setInterval(rotation, 2000); rotation();
+    setStatus('Connecté à '+device.name,'ok');
+    $('btnConnect').disabled=true; $('btnDisconnect').disabled=false; $('btnRec').disabled=false;
+  }catch(e){ setStatus('Échec : '+e.message,'err'); log('Erreur : '+e); }
+};
+
+$('btnDisconnect').onclick = () => { if(device && device.gatt.connected) device.gatt.disconnect(); };
+
+function onDisconnected(){
+  clearInterval(timer); timer=null; buf=[];
+  setStatus('Déconnecté.');
+  log('Déconnecté');
+  $('btnConnect').disabled=false; $('btnDisconnect').disabled=true;
+}
+
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+async function send(frame){
+  if (tx.writeValueWithoutResponse) await tx.writeValueWithoutResponse(frame);
+  else await tx.writeValue(frame);
+}
+async function rotation(){
+  if (busy || !device || !device.gatt.connected) return;
+  busy=true;
+  try{ for(const p of ROTATION){ await send(p.frame); await sleep(150); } }
+  catch(e){ log('Erreur envoi : '+e.message); }
+  busy=false;
+}
+
+// ---------- Réception : on reconstitue les trames (elles peuvent arriver en morceaux) ----------
+function onNotify(e){
+  const dv = e.target.value;
+  buf.push(...new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+  while (buf.length >= 6){
+    if (buf[0]!==0x46 || buf[1]!==0x64){ buf.shift(); continue; }
+    const total = buf[3] + 6;
+    if (buf.length < total) break;
+    const f = buf.slice(0,total); buf = buf.slice(total);
+    if (xor(f.slice(0,-1)) !== f[total-1]){ log('Trame corrompue ignorée : '+hex(f)); continue; }
+    handle(f);
+  }
+}
+
+const be16 = (p,o) => (p[o]<<8) | p[o+1];
+const be32 = (p,o) => p[o]*16777216 + (p[o+1]<<16) + (p[o+2]<<8) + p[o+3];
+
+function handle(f){
+  const addr = f[4], p = f.slice(5,-1);
+  const name = NAMES[addr] || ('0x'+addr.toString(16));
+  rawFrames[name] = hex(p);
+  $('raw').textContent = Object.entries(rawFrames).map(([k,v])=>`${k} (${v.split(' ').length} octets)\n${v}`).join('\n\n');
+
+  // Le numéro de registre documenté désigne le DERNIER octet de la valeur
+  if (addr===0x05 && p.length>=35){          // STATS : octet n° (registre - 0x05)
+    show('total', (be32(p,0x1C-5)/10).toFixed(1));   // registres 0x1C..0x1F
+    show('trip',  (be16(p,0x20-5)/10).toFixed(1));   // registres 0x20..0x21
+    show('speed', (be16(p,0x22-5)/10).toFixed(1));   // registres 0x22..0x23
+    show('soc',   p[0x24-5]);
+    const g = p[0x26-5];
+    show('gear',  GEARS3[g] ?? ('niveau '+g));
+    const flags = p[0x27-5];
+    show('motor', (flags & 0x80) ? 'Allumé' : 'Éteint');
+    show('light', (flags & 0x08) ? 'Allumé' : 'Éteint');
+    show('limit', (flags & 0x20) ? 'Actif' : 'Inactif');
+    record();
+  }
+  if (addr===0x96 && p.length>=12){          // MOTOR : registres 0x96..0xA1
+    show('wheel',  (be16(p,5)/10).toFixed(0));  // 0x9B..0x9C
+    show('mpower', be16(p,9));                  // 0x9F..0xA0
+    show('mtemp',  p[11]);                      // 0xA1
+  }
+  if (addr===0xC8 && p.length>=12){          // ENERGY : registres 0xC8..0xD3
+    const s = be16(p,10);                       // 0xD2..0xD3, en secondes
+    show('uptime', Math.floor(s/60)+' min '+String(s%60).padStart(2,'0')+' s');
+    // Emplacements supposés, à confirmer en pédalant :
+    show('torque', be16(p,0));
+    show('rpm',    be16(p,2));
+  }
+  if (addr===0x7B && p.length>=7){           // BATTERY
+    show('capacity', (be16(p,0x7D-0x7B)/10).toFixed(1)); // registres 0x7D..0x7E
+    show('voltage',  (be16(p,0x7F-0x7B)/10).toFixed(1)); // registres 0x7F..0x80
+  }
+}
+
+// ---------- Enregistrement ----------
+let recording=false, rows=[];
+$('btnRec').onclick = () => {
+  recording = !recording;
+  $('btnRec').textContent = recording ? "Arrêter l'enregistrement" : "Démarrer l'enregistrement";
+  $('btnRec').className = recording ? 'rec' : '';
+  if (recording) rows=[];
+  $('btnCsv').disabled = recording || rows.length===0;
+  log(recording ? 'Enregistrement démarré' : `Enregistrement arrêté (${rows.length} mesures)`);
+};
+function record(){
+  if (!recording) return;
+  rows.push([new Date().toISOString(), state.speed, state.soc, state.voltage, state.trip, state.total, state.gear, state.motor, state.light, state.mtemp, state.torque, state.rpm, rawFrames.STATS||'', rawFrames.BATTERY||'', rawFrames.MOTOR||'', rawFrames.ENERGY||'']);
+}
+$('btnCsv').onclick = () => {
+  const head = ['horodatage','vitesse_kmh','batterie_pct','tension_v','trajet_km','total_km','assistance','systeme','eclairage','temp_moteur_c','couple_brut','cadence_brut','stats_brut','batterie_brut','moteur_brut','energie_brut'];
+  const csv = [head, ...rows].map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(';')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'}));
+  a.download = 'fiido-' + new Date().toISOString().slice(0,16).replace(/[:T]/g,'-') + '.csv';
+  a.click();
+};
+</script>
+</body>
+</html>

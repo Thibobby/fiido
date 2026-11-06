@@ -3,131 +3,174 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f766e">
 <title>Fiido Explorer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
-:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--muted:#6b6b66;--accent:#0f766e;--line:#e4e2dc;--warn:#b45309}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1f1f1d;--ink:#f1efe8;--muted:#9a988f;--accent:#2dd4bf;--line:#33322e;--warn:#f59e0b}}
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--muted:#6b6b66;--accent:#0f766e;--line:#e4e2dc;--warn:#b45309;--rec:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1f1f1d;--ink:#f1efe8;--muted:#9a988f;--accent:#2dd4bf;--line:#33322e;--warn:#f59e0b;--rec:#ef4444}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:720px;margin:0 auto;padding:16px}
 h1{font-size:22px;margin:8px 0 4px}
+h2{font-size:15px;margin:18px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .sub{color:var(--muted);margin:0 0 16px;font-size:14px}
 .bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 button{font:inherit;padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-button.rec{background:#b91c1c;border-color:#b91c1c;color:#fff}
+button.rec{background:var(--rec);border-color:var(--rec);color:#fff}
+button.big{flex:1 1 100%;padding:16px;font-size:18px;font-weight:600}
 button:disabled{opacity:.45;cursor:default}
-#status{font-size:14px;color:var(--muted);margin-bottom:12px}
+#status{font-size:14px;color:var(--muted);margin-bottom:8px}
 #status.ok{color:var(--accent)}#status.err{color:var(--warn)}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+#gpsStatus{font-size:13px;color:var(--muted);margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:8px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
 .tile .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .tile .v{font-size:26px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
 .tile .u{font-size:14px;color:var(--muted);font-weight:400;margin-left:3px}
-details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+.tile.hero .v{font-size:40px}
+#tripPanel{display:none}
+#map{display:none;height:300px;border-radius:12px;border:1px solid var(--line);margin-bottom:12px;z-index:0}
+.hist{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0}
+.hh{font-weight:600}.hh::first-letter{text-transform:uppercase}
+.hs{font-size:14px;color:var(--muted);margin:4px 0 10px}
+.ha{display:flex;gap:6px;flex-wrap:wrap}.ha button{padding:6px 10px;font-size:14px}
+#btnFollow{display:none;margin:-4px 0 12px}
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:10px 0}
 summary{cursor:pointer;font-weight:600}
 pre{font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;margin:8px 0 0;max-height:320px;overflow:auto}
 .note{font-size:13px;color:var(--muted)}
+#recovered{display:none;background:var(--card);border:1px solid var(--warn);border-radius:12px;padding:12px;margin-bottom:12px;font-size:14px}
 </style>
 </head>
 <body>
 <main>
   <h1>Fiido Explorer</h1>
-  <p class="sub">Étape 1 — lecture seule. Cette page ne modifie aucun réglage du vélo.</p>
+  <p class="sub">Version 5 — trajets et historique. Lecture seule : aucun réglage du vélo n'est modifié.</p>
+
+  <div id="recovered">Un trajet interrompu (page fermée pendant l'enregistrement) a été récupéré et ajouté à l'historique.</div>
 
   <div class="bar">
     <button id="btnConnect" class="primary">Se connecter au vélo</button>
     <button id="btnDisconnect" disabled>Déconnecter</button>
-    <button id="btnRec" disabled>Démarrer l'enregistrement</button>
-    <button id="btnCsv" disabled>Exporter CSV</button>
   </div>
   <div id="status">Non connecté.</div>
 
+  <div class="bar">
+    <button id="btnTrip" class="big" disabled>Démarrer un trajet</button>
+    <button id="btnCsv" disabled>Exporter CSV</button>
+    <button id="btnGpx" disabled>Exporter GPX</button>
+  </div>
+  <div id="gpsStatus">GPS : inactif</div>
+  <div id="map"></div>
+  <button id="btnFollow">Recentrer sur ma position</button>
+
+  <div id="tripPanel">
+    <h2>Trajet en cours</h2>
+    <div class="grid" id="tripTiles"></div>
+  </div>
+
+  <h2>Historique</h2>
+  <div id="histTotals" class="note"></div>
+  <div id="history"></div>
+
+  <h2>Vélo</h2>
   <div class="grid" id="tiles"></div>
 
-  <details open><summary>Trames brutes (dernière reçue de chaque type)</summary><pre id="raw">—</pre></details>
+  <details><summary>Trames brutes (dernière reçue de chaque type)</summary><pre id="raw">—</pre></details>
   <details><summary>Journal technique</summary><pre id="log"></pre></details>
 
-  <p class="note">Fermez l'application Fiido officielle avant de vous connecter : le vélo n'accepte qu'une connexion à la fois. Déconnectez-vous à la fin pour que le vélo puisse se mettre en veille.</p>
+  <p class="note">Fermez l'application Fiido officielle avant de vous connecter. Pendant un trajet, gardez l'écran allumé et la page au premier plan : Android coupe le Bluetooth et le GPS des pages en arrière-plan. Déconnectez-vous à la fin pour que le vélo puisse se mettre en veille.</p>
 </main>
 
 <script>
-// ---------- Identifiants Bluetooth du vélo ----------
+// ================= Protocole Bluetooth du vélo =================
 const SVC = '00010203-0405-0607-0809-0a0b0c0dffe0';
-const RX  = '00010203-0405-0607-0809-0a0b0c0dffe1'; // le vélo nous parle ici
-const TX  = '00010203-0405-0607-0809-0a0b0c0dffe2'; // on parle au vélo ici
+const RX  = '00010203-0405-0607-0809-0a0b0c0dffe1';
+const TX  = '00010203-0405-0607-0809-0a0b0c0dffe2';
 
-// ---------- Demandes de lecture ("polls") ----------
-// Format : 'F' 'd' 0x55 longueur adresse CRC
+function xor(a){ let x=0; for(const b of a) x^=b; return x; }
 function poll(len, addr){ const f=[0x46,0x64,0x55,len,addr]; f.push(xor(f)); return new Uint8Array(f); }
 const HANDSHAKE = poll(0x0D,0x0D);
-const ROTATION = [
-  {name:'STATS',   frame: poll(0x35,0x05)},
-  {name:'BATTERY', frame: poll(0x0D,0x7B)},
-  {name:'MOTOR',   frame: poll(0x0C,0x96)},
-  {name:'ENERGY',  frame: poll(0x0C,0xC8)},
-];
+const ROTATION = [poll(0x35,0x05), poll(0x0D,0x7B), poll(0x0C,0x96), poll(0x0C,0xC8)];
 const NAMES = {0x0D:'HANDSHAKE',0x05:'STATS',0x7B:'BATTERY',0x96:'MOTOR',0xC8:'ENERGY'};
-
-// ---------- Affichage ----------
-const TILES = [
-  ['speed','Vitesse','km/h'],['soc','Batterie','%'],['voltage','Tension','V'],
-  ['trip','Trajet','km'],['total','Compteur (ODO)','km'],['capacity','Capacité','Ah'],
-  ['gear','Assistance',''],['motor','Système',''],['light','Éclairage',''],
-  ['mtemp','Temp. moteur','°C'],['uptime','Allumé depuis',''],['limit','Limiteur',''],
-  ['torque','Couple (brut)',''],['rpm','Cadence (brut)',''],
-  ['wheel','Roue','pouces'],['mpower','Moteur nominal','W'],
-];
 const GEARS3 = ['Arrêt','Éco','Sport','Turbo'];
-const state = {};
-const tilesEl = document.getElementById('tiles');
-tilesEl.innerHTML = TILES.map(([k,l,u])=>`<div class="tile"><div class="k">${l}</div><div class="v"><span id="v_${k}">—</span><span class="u">${u}</span></div></div>`).join('');
-function show(k,v){ state[k]=v; const el=document.getElementById('v_'+k); if(el) el.textContent=v; }
 
+// ================= Affichage =================
 const $ = id => document.getElementById(id);
 const hex = a => Array.from(a,b=>b.toString(16).padStart(2,'0')).join(' ');
-function xor(a){ let x=0; for(const b of a) x^=b; return x; }
+function tilesHtml(list){ return list.map(([k,l,u,cls])=>`<div class="tile ${cls||''}"><div class="k">${l}</div><div class="v"><span id="v_${k}">—</span><span class="u">${u}</span></div></div>`).join(''); }
+
+$('tiles').innerHTML = tilesHtml([
+  ['speed','Vitesse','km/h','hero'],['soc','Batterie','%','hero'],
+  ['gear','Assistance',''],['motor','Système',''],['light','Éclairage',''],['limit','Limiteur',''],
+  ['trip','Trajet vélo','km'],['total','Compteur (ODO)','km'],['mtemp','Temp. moteur','°C'],
+  ['uptime','Allumé depuis',''],['torque','Couple (brut)',''],['rpm','Cadence (brut)',''],
+  ['voltage','Tension nominale','V'],['capacity','Capacité','Ah'],['wheel','Roue','pouces'],['mpower','Moteur nominal','W'],
+]);
+$('tripTiles').innerHTML = tilesHtml([
+  ['t_dur','Durée',''],['t_dist','Distance GPS','km'],['t_bike','Distance vélo','km'],
+  ['t_avg','Vitesse moy.','km/h'],['t_max','Vitesse max','km/h'],['t_soc','Batterie utilisée','%'],
+  ['t_cons','Consommation','%/km'],['t_pts','Points GPS',''],
+]);
+
+const state = {};
+function show(k,v){ state[k]=v; const el=$('v_'+k); if(el) el.textContent=v; }
 function log(m){ const t=new Date().toLocaleTimeString(); $('log').textContent = `[${t}] ${m}\n` + $('log').textContent.slice(0,8000); }
 function setStatus(m,cls=''){ $('status').textContent=m; $('status').className=cls; }
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
-// ---------- Connexion ----------
-let device=null, tx=null, rx=null, timer=null, busy=false, buf=[];
+// ================= Connexion Bluetooth =================
+let device=null, tx=null, timer=null, busy=false, buf=[], manualDisconnect=false;
 const rawFrames = {};
 
 $('btnConnect').onclick = async () => {
-  if (!navigator.bluetooth){ setStatus("Ce navigateur ne gère pas le Bluetooth web. Utilisez Chrome (Android/PC) ou Edge (PC).",'err'); return; }
+  if (!navigator.bluetooth){ setStatus("Ce navigateur ne gère pas le Bluetooth web. Utilisez Chrome.",'err'); return; }
   try{
     setStatus('Recherche du vélo…');
-    device = await navigator.bluetooth.requestDevice({
-      filters:[{namePrefix:'Fiido'}],
-      optionalServices:[SVC]
-    });
+    device = await navigator.bluetooth.requestDevice({ filters:[{namePrefix:'Fiido'}], optionalServices:[SVC] });
     device.addEventListener('gattserverdisconnected', onDisconnected);
-    setStatus('Connexion à '+device.name+'…');
-    const server = await device.gatt.connect();
-    const svc = await server.getPrimaryService(SVC);
-    rx = await svc.getCharacteristic(RX);
-    tx = await svc.getCharacteristic(TX);
-    await rx.startNotifications();
-    rx.addEventListener('characteristicvaluechanged', onNotify);
-    log('Connecté à '+device.name);
-    await send(HANDSHAKE); await sleep(300);
-    timer = setInterval(rotation, 2000); rotation();
-    setStatus('Connecté à '+device.name,'ok');
-    $('btnConnect').disabled=true; $('btnDisconnect').disabled=false; $('btnRec').disabled=false;
+    await setupGatt();
   }catch(e){ setStatus('Échec : '+e.message,'err'); log('Erreur : '+e); }
 };
 
-$('btnDisconnect').onclick = () => { if(device && device.gatt.connected) device.gatt.disconnect(); };
-
-function onDisconnected(){
-  clearInterval(timer); timer=null; buf=[];
-  setStatus('Déconnecté.');
-  log('Déconnecté');
-  $('btnConnect').disabled=false; $('btnDisconnect').disabled=true;
+async function setupGatt(){
+  setStatus('Connexion à '+device.name+'…');
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  const rx = await svc.getCharacteristic(RX);
+  tx = await svc.getCharacteristic(TX);
+  await rx.startNotifications();
+  rx.addEventListener('characteristicvaluechanged', onNotify);
+  buf = [];
+  await send(HANDSHAKE); await sleep(300);
+  clearInterval(timer); timer = setInterval(rotation, 2000); rotation();
+  manualDisconnect = false;
+  setStatus('Connecté à '+device.name,'ok'); log('Connecté à '+device.name);
+  $('btnConnect').disabled=true; $('btnDisconnect').disabled=false; $('btnTrip').disabled=false;
 }
 
-const sleep = ms => new Promise(r=>setTimeout(r,ms));
+$('btnDisconnect').onclick = () => { manualDisconnect = true; if(device && device.gatt.connected) device.gatt.disconnect(); };
+
+async function onDisconnected(){
+  clearInterval(timer); timer=null; buf=[];
+  log('Déconnecté');
+  $('btnConnect').disabled=false; $('btnDisconnect').disabled=true;
+  // Pendant un trajet, on tente de se reconnecter tout seul (sans repasser par la liste)
+  if (trip && !manualDisconnect){
+    for (let i=1; i<=10 && trip && !(device.gatt.connected); i++){
+      setStatus(`Connexion perdue, nouvelle tentative (${i}/10)…`,'err');
+      await sleep(3000);
+      try{ await setupGatt(); return; }catch(e){ log('Reconnexion échouée : '+e.message); }
+    }
+    setStatus('Connexion perdue. Le GPS continue d\'enregistrer. Touchez « Se connecter » pour reprendre.','err');
+  } else {
+    setStatus('Déconnecté.');
+  }
+}
+
 async function send(frame){
   if (tx.writeValueWithoutResponse) await tx.writeValueWithoutResponse(frame);
   else await tx.writeValue(frame);
@@ -135,12 +178,11 @@ async function send(frame){
 async function rotation(){
   if (busy || !device || !device.gatt.connected) return;
   busy=true;
-  try{ for(const p of ROTATION){ await send(p.frame); await sleep(150); } }
+  try{ for(const f of ROTATION){ await send(f); await sleep(150); } }
   catch(e){ log('Erreur envoi : '+e.message); }
   busy=false;
 }
 
-// ---------- Réception : on reconstitue les trames (elles peuvent arriver en morceaux) ----------
 function onNotify(e){
   const dv = e.target.value;
   buf.push(...new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
@@ -149,7 +191,7 @@ function onNotify(e){
     const total = buf[3] + 6;
     if (buf.length < total) break;
     const f = buf.slice(0,total); buf = buf.slice(total);
-    if (xor(f.slice(0,-1)) !== f[total-1]){ log('Trame corrompue ignorée : '+hex(f)); continue; }
+    if (xor(f.slice(0,-1)) !== f[total-1]){ log('Trame corrompue ignorée'); continue; }
     handle(f);
   }
 }
@@ -161,13 +203,13 @@ function handle(f){
   const addr = f[4], p = f.slice(5,-1);
   const name = NAMES[addr] || ('0x'+addr.toString(16));
   rawFrames[name] = hex(p);
-  $('raw').textContent = Object.entries(rawFrames).map(([k,v])=>`${k} (${v.split(' ').length} octets)\n${v}`).join('\n\n');
+  $('raw').textContent = Object.entries(rawFrames).map(([k,v])=>`${k}\n${v}`).join('\n\n');
 
   // Le numéro de registre documenté désigne le DERNIER octet de la valeur
-  if (addr===0x05 && p.length>=35){          // STATS : octet n° (registre - 0x05)
-    show('total', (be32(p,0x1C-5)/10).toFixed(1));   // registres 0x1C..0x1F
-    show('trip',  (be16(p,0x20-5)/10).toFixed(1));   // registres 0x20..0x21
-    show('speed', (be16(p,0x22-5)/10).toFixed(1));   // registres 0x22..0x23
+  if (addr===0x05 && p.length>=35){
+    show('total', (be32(p,0x1C-5)/10).toFixed(1));
+    show('trip',  (be16(p,0x20-5)/10).toFixed(1));
+    show('speed', (be16(p,0x22-5)/10).toFixed(1));
     show('soc',   p[0x24-5]);
     const g = p[0x26-5];
     show('gear',  GEARS3[g] ?? ('niveau '+g));
@@ -177,46 +219,292 @@ function handle(f){
     show('limit', (flags & 0x20) ? 'Actif' : 'Inactif');
     record();
   }
-  if (addr===0x96 && p.length>=12){          // MOTOR : registres 0x96..0xA1
-    show('wheel',  (be16(p,5)/10).toFixed(0));  // 0x9B..0x9C
-    show('mpower', be16(p,9));                  // 0x9F..0xA0
-    show('mtemp',  p[11]);                      // 0xA1
+  if (addr===0x96 && p.length>=12){
+    show('wheel',  (be16(p,5)/10).toFixed(0));
+    show('mpower', be16(p,9));
+    show('mtemp',  p[11]);
   }
-  if (addr===0xC8 && p.length>=12){          // ENERGY : registres 0xC8..0xD3
-    const s = be16(p,10);                       // 0xD2..0xD3, en secondes
+  if (addr===0xC8 && p.length>=12){
+    const s = be16(p,10);
     show('uptime', Math.floor(s/60)+' min '+String(s%60).padStart(2,'0')+' s');
-    // Emplacements supposés, à confirmer en pédalant :
     show('torque', be16(p,0));
     show('rpm',    be16(p,2));
   }
-  if (addr===0x7B && p.length>=7){           // BATTERY
-    show('capacity', (be16(p,0x7D-0x7B)/10).toFixed(1)); // registres 0x7D..0x7E
-    show('voltage',  (be16(p,0x7F-0x7B)/10).toFixed(1)); // registres 0x7F..0x80
+  if (addr===0x7B && p.length>=7){
+    show('capacity', (be16(p,2)/10).toFixed(1));
+    show('voltage',  (be16(p,4)/10).toFixed(1));
   }
 }
 
-// ---------- Enregistrement ----------
-let recording=false, rows=[];
-$('btnRec').onclick = () => {
-  recording = !recording;
-  $('btnRec').textContent = recording ? "Arrêter l'enregistrement" : "Démarrer l'enregistrement";
-  $('btnRec').className = recording ? 'rec' : '';
-  if (recording) rows=[];
-  $('btnCsv').disabled = recording || rows.length===0;
-  log(recording ? 'Enregistrement démarré' : `Enregistrement arrêté (${rows.length} mesures)`);
-};
-function record(){
-  if (!recording) return;
-  rows.push([new Date().toISOString(), state.speed, state.soc, state.voltage, state.trip, state.total, state.gear, state.motor, state.light, state.mtemp, state.torque, state.rpm, rawFrames.STATS||'', rawFrames.BATTERY||'', rawFrames.MOTOR||'', rawFrames.ENERGY||'']);
+// ================= GPS =================
+let gpsWatch=null, fix=null;
+function haversine(a,b){
+  const R=6371000, toR=x=>x*Math.PI/180;
+  const dLat=toR(b.lat-a.lat), dLon=toR(b.lon-a.lon);
+  const h=Math.sin(dLat/2)**2 + Math.cos(toR(a.lat))*Math.cos(toR(b.lat))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
 }
-$('btnCsv').onclick = () => {
-  const head = ['horodatage','vitesse_kmh','batterie_pct','tension_v','trajet_km','total_km','assistance','systeme','eclairage','temp_moteur_c','couple_brut','cadence_brut','stats_brut','batterie_brut','moteur_brut','energie_brut'];
-  const csv = [head, ...rows].map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(';')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'}));
-  a.download = 'fiido-' + new Date().toISOString().slice(0,16).replace(/[:T]/g,'-') + '.csv';
-  a.click();
+function startGps(){
+  if (!('geolocation' in navigator)){ $('gpsStatus').textContent='GPS : non disponible'; return; }
+  $('gpsStatus').textContent='GPS : recherche du signal…';
+  gpsWatch = navigator.geolocation.watchPosition(onFix,
+    e => { $('gpsStatus').textContent='GPS : '+e.message; log('GPS : '+e.message); },
+    {enableHighAccuracy:true, maximumAge:1000, timeout:20000});
+}
+function stopGps(){ if (gpsWatch!==null) navigator.geolocation.clearWatch(gpsWatch); gpsWatch=null; $('gpsStatus').textContent='GPS : inactif'; }
+function onFix(pos){
+  const c = pos.coords;
+  fix = {t:pos.timestamp, lat:c.latitude, lon:c.longitude, acc:c.accuracy, ele:c.altitude, gspeed:c.speed};
+  $('gpsStatus').textContent = `GPS : précision ${Math.round(c.accuracy)} m`;
+  showOnMap(fix);
+  if (!trip || c.accuracy > 30) return;      // on ignore les positions trop imprécises
+  const last = trip.points[trip.points.length-1];
+  if (last){
+    const d = haversine(last, fix);
+    if (d < 3) return;                         // immobile : on n'ajoute pas de point
+    trip.gpsDist += d;
+  }
+  trip.points.push({t:fix.t, lat:fix.lat, lon:fix.lon, ele:fix.ele});
+  if (line) line.addLatLng([fix.lat, fix.lon]);
+  updateTrip();
+}
+
+// ================= Carte =================
+let map=null, line=null, marker=null, follow=true;
+function ensureMap(){
+  if (map || !window.L) return !!map;
+  $('map').style.display='block'; $('btnFollow').style.display='inline-block';
+  map = L.map('map', {zoomControl:true});
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:19, attribution:'© contributeurs OpenStreetMap'}).addTo(map);
+  line = L.polyline([], {color:'#0f766e', weight:5}).addTo(map);
+  marker = L.circleMarker([0,0], {radius:8, color:'#fff', weight:3, fillColor:'#2563eb', fillOpacity:1});
+  map.on('dragstart', () => { follow=false; });
+  return true;
+}
+function showOnMap(f){
+  if (!ensureMap()) return;
+  if (!map.hasLayer(marker)) { marker.addTo(map); map.setView([f.lat,f.lon], 16); }
+  marker.setLatLng([f.lat, f.lon]);
+  if (follow) map.panTo([f.lat, f.lon], {animate:true});
+}
+$('btnFollow').onclick = () => { follow=true; if (fix && map) map.setView([fix.lat,fix.lon], Math.max(map.getZoom(),16)); };
+
+// ================= Écran toujours allumé =================
+let wakeLock=null;
+async function keepAwake(){
+  try{ if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }
+  catch(e){ log('Écran allumé : '+e.message); }
+}
+document.addEventListener('visibilitychange', () => {
+  if (trip && document.visibilityState==='visible') keepAwake();
+});
+
+// ================= Trajet =================
+let trip=null, lastTrip=null, tripClock=null;
+const num = v => (v===undefined || v===null || v==='') ? null : parseFloat(v);
+
+$('btnTrip').onclick = () => trip ? stopTrip() : startTrip();
+
+function startTrip(){
+  trip = { id:Date.now(), start:Date.now(), rows:[], points:[], gpsDist:0, vmax:0,
+           socStart:num(state.soc), odoStart:num(state.total), inProgress:true };
+  $('btnTrip').textContent='Arrêter le trajet'; $('btnTrip').className='big rec';
+  $('btnCsv').disabled = $('btnGpx').disabled = true;
+  $('tripPanel').style.display='block'; $('recovered').style.display='none';
+  if (line) line.setLatLngs([]);
+  follow = true;
+  startGps(); keepAwake();
+  tripClock = setInterval(updateTrip, 1000);
+  log('Trajet démarré');
+}
+
+async function stopTrip(){
+  clearInterval(tripClock); stopGps();
+  try{ wakeLock && wakeLock.release(); }catch(e){}
+  const t = trip; trip = null;
+  finalize(t, Date.now(), num(state.soc), num(state.total));
+  lastTrip = t;
+  await dbPut(t);
+  $('btnTrip').textContent='Démarrer un trajet'; $('btnTrip').className='big';
+  $('btnTrip').disabled = !(device && device.gatt.connected);
+  setExportButtons();
+  renderHistory();
+  log(`Trajet terminé : ${t.rows.length} mesures, ${t.points.length} points GPS`);
+}
+
+function finalize(t, end, socEnd, odoEnd){
+  if (t.socStart==null) t.socStart = socEnd;
+  if (t.odoStart==null) t.odoStart = odoEnd;
+  t.end = end; t.inProgress = false;
+  t.summary = summarize(t, end, socEnd, odoEnd);
+}
+function summarize(t, now, soc, odo){
+  const s = Math.max(0, Math.floor((now - t.start)/1000));
+  const km = (t.gpsDist||0)/1000;
+  const bike = (odo!=null && t.odoStart!=null) ? odo - t.odoStart : null;
+  const used = (soc!=null && t.socStart!=null) ? t.socStart - soc : null;
+  const dist = (bike!=null && bike>0.5) ? bike : km;
+  return { dur:s, km, bike, dist, avg: s>0 ? dist/(s/3600) : 0, vmax:t.vmax||0,
+           used, cons: (used!=null && dist>0.5) ? used/dist : null };
+}
+function fmtDur(s){ return `${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
+
+function record(){
+  if (!trip) return;
+  const sp = num(state.speed);
+  if (sp!==null && sp > trip.vmax) trip.vmax = sp;
+  if (trip.socStart===null) trip.socStart = num(state.soc);
+  if (trip.odoStart===null) trip.odoStart = num(state.total);
+  trip.rows.push([new Date().toISOString(), state.speed, state.soc, state.trip, state.total, state.gear,
+    state.motor, state.light, state.mtemp, state.torque, state.rpm,
+    fix?fix.lat:'', fix?fix.lon:'', fix?Math.round(fix.acc):'', fix&&fix.ele!=null?fix.ele.toFixed(1):'',
+    fix&&fix.gspeed!=null?(fix.gspeed*3.6).toFixed(1):'', rawFrames.STATS||'']);
+  if (trip.rows.length % 15 === 0) dbPut(trip);   // sauvegarde de secours toutes les ~30 s
+  updateTrip();
+}
+
+function updateTrip(){
+  if (!trip) return;
+  const s = summarize(trip, Date.now(), num(state.soc), num(state.total));
+  show('t_dur', fmtDur(s.dur));
+  show('t_dist', s.km.toFixed(2));
+  show('t_bike', s.bike!=null ? s.bike.toFixed(1) : '—');
+  show('t_avg', s.avg.toFixed(1));
+  show('t_max', s.vmax.toFixed(1));
+  show('t_soc', s.used!=null ? s.used : '—');
+  show('t_cons', s.cons!=null ? s.cons.toFixed(1) : '—');
+  show('t_pts', trip.points.length);
+}
+
+// ================= Stockage des trajets (sur le téléphone) =================
+let dbp = null;
+function db(){
+  return dbp ??= new Promise((res,rej)=>{
+    const r = indexedDB.open('fiido', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('trips', {keyPath:'id'});
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idb(mode, fn){
+  const d = await db();
+  return new Promise((res,rej)=>{
+    const t = d.transaction('trips', mode);
+    const req = fn(t.objectStore('trips'));
+    t.oncomplete = () => res(req ? req.result : undefined);
+    t.onerror = () => rej(t.error);
+  });
+}
+const dbPut = t => idb('readwrite', s=>s.put(t)).catch(e=>log('Sauvegarde impossible : '+e.message));
+const dbAll = () => idb('readonly', s=>s.getAll());
+const dbDel = id => idb('readwrite', s=>s.delete(id));
+
+// ================= Historique =================
+async function renderHistory(){
+  let trips = [];
+  try{ trips = await dbAll(); }catch(e){ log('Lecture historique impossible : '+e.message); }
+  trips = trips.filter(t=>!t.inProgress).sort((a,b)=>b.start-a.start);
+  const totKm = trips.reduce((a,t)=>a+(t.summary.dist||0), 0);
+  $('histTotals').textContent = trips.length
+    ? `${trips.length} trajet${trips.length>1?'s':''} · ${totKm.toFixed(1)} km au total`
+    : "Aucun trajet enregistré pour l'instant.";
+  $('history').innerHTML = trips.map(t=>{
+    const s = t.summary, d = new Date(t.start);
+    const when = d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})
+               + ' à ' + d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+    const bits = [`${s.dist.toFixed(1)} km`, fmtDur(s.dur), `${s.avg.toFixed(1)} km/h moy.`, `max ${s.vmax.toFixed(1)} km/h`];
+    if (s.used!=null) bits.push(`${s.used} % de batterie` + (s.cons!=null ? ` (${s.cons.toFixed(1)} %/km)` : ''));
+    return `<div class="hist" data-id="${t.id}">
+      <div class="hh">${when}</div>
+      <div class="hs">${bits.join(' · ')}</div>
+      <div class="ha">
+        <button data-act="view" ${t.points.length?'':'disabled'}>Voir sur la carte</button>
+        <button data-act="csv">CSV</button>
+        <button data-act="gpx" ${t.points.length?'':'disabled'}>GPX</button>
+        <button data-act="del">Supprimer</button>
+      </div></div>`;
+  }).join('');
+}
+
+$('history').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const id = Number(b.closest('.hist').dataset.id);
+  const t = (await dbAll()).find(x=>x.id===id); if (!t) return;
+  const act = b.dataset.act;
+  if (act==='view') showTrip(t);
+  if (act==='csv') exportCsv(t);
+  if (act==='gpx') exportGpx(t);
+  if (act==='del' && confirm('Supprimer définitivement ce trajet ?')){ await dbDel(id); renderHistory(); }
 };
+
+function showTrip(t){
+  lastTrip = t; setExportButtons();
+  if (!t.points.length || !ensureMap()) return;
+  follow = false;
+  if (map.hasLayer(marker)) map.removeLayer(marker);
+  line.setLatLngs(t.points.map(p=>[p.lat,p.lon]));
+  map.fitBounds(line.getBounds(), {padding:[20,20]});
+  $('map').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function setExportButtons(){
+  $('btnCsv').disabled = !(lastTrip && lastTrip.rows.length);
+  $('btnGpx').disabled = !(lastTrip && lastTrip.points.length);
+}
+
+// ================= Exports =================
+function stamp(t){ return new Date(t.start).toISOString().slice(0,16).replace(/[:T]/g,'-'); }
+function download(name, content, type){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content],{type}));
+  a.download = name; a.click();
+}
+function exportCsv(t){
+  const head = ['horodatage','vitesse_kmh','batterie_pct','trajet_km','total_km','assistance','systeme','eclairage',
+    'temp_moteur_c','couple_brut','cadence_brut','latitude','longitude','precision_gps_m','altitude_m','vitesse_gps_kmh','stats_brut'];
+  const csv = [head, ...t.rows].map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(';')).join('\n');
+  download(`fiido-${stamp(t)}.csv`, '﻿'+csv, 'text/csv');
+}
+function exportGpx(t){
+  const pts = t.points.map(p =>
+    `<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${p.ele!=null?`<ele>${p.ele.toFixed(1)}</ele>`:''}<time>${new Date(p.t).toISOString()}</time></trkpt>`).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Fiido Explorer" xmlns="http://www.topografix.com/GPX/1/1">
+<trk><name>Trajet vélo ${new Date(t.start).toLocaleString('fr-FR')}</name><type>cycling</type><trkseg>
+${pts}
+</trkseg></trk></gpx>`;
+  download(`fiido-${stamp(t)}.gpx`, gpx, 'application/gpx+xml');
+}
+$('btnCsv').onclick = () => lastTrip && exportCsv(lastTrip);
+$('btnGpx').onclick = () => lastTrip && exportGpx(lastTrip);
+
+// ================= Au démarrage de la page =================
+(async () => {
+  try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
+  // Reprise de l'ancien format de sauvegarde (version 4)
+  try{
+    const old = JSON.parse(localStorage.getItem('fiido_last_trip') || 'null');
+    if (old && old.rows && old.rows.length){
+      old.id = old.id || old.start; delete old.clock;
+      const last = old.rows[old.rows.length-1];
+      finalize(old, old.end || Date.parse(last[0]), num(last[2]), num(last[4]));
+      await dbPut(old);
+    }
+    localStorage.removeItem('fiido_last_trip');
+  }catch(e){}
+  // Récupération d'un trajet interrompu (page fermée pendant l'enregistrement)
+  try{
+    for (const t of (await dbAll()).filter(t=>t.inProgress)){
+      const last = t.rows[t.rows.length-1];
+      if (!last){ await dbDel(t.id); continue; }
+      finalize(t, Date.parse(last[0]), num(last[2]), num(last[4]));
+      await dbPut(t);
+      $('recovered').style.display = 'block';
+    }
+  }catch(e){ log('Récupération impossible : '+e.message); }
+  renderHistory();
+})();
 </script>
 </body>
 </html>

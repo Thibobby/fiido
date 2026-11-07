@@ -57,6 +57,13 @@ input{font:inherit;width:100%;padding:10px;border-radius:10px;border:1px solid v
 .note{font-size:13px;color:var(--muted)}
 .banner{display:none;background:var(--card);border:1px solid var(--warn);border-radius:12px;padding:12px;margin-bottom:12px;font-size:14px}
 .banner button{margin-left:8px;padding:6px 10px;font-size:14px}
+.bikebar{display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:15px}
+.bikebar button{padding:6px 10px;font-size:14px}
+.picker{display:none;background:var(--card);border:2px solid var(--accent);border-radius:12px;padding:12px;margin-bottom:12px}
+.picker button{margin:4px 6px 4px 0}
+select{font:inherit;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+.bikerow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
+.bikerow button{padding:6px 10px;font-size:14px}
 footer{margin:24px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 </style>
 </head>
@@ -80,6 +87,11 @@ footer{margin:24px 0 8px;font-size:12px;color:var(--muted);text-align:center}
       <button id="btnDisconnect" disabled>Déconnecter</button>
     </div>
     <div class="status" id="status">Non connecté.</div>
+    <div class="bikebar" id="bikeBar">Vélo : <b id="bikeLabel">—</b>
+      <button id="btnRename">Renommer</button>
+      <button id="btnChangeBike">Ce n'est pas ce vélo</button>
+    </div>
+    <div class="picker" id="bikePicker"></div>
 
     <div class="bar">
       <button id="btnTrip" class="big" disabled>Démarrer un trajet</button>
@@ -125,6 +137,17 @@ footer{margin:24px 0 8px;font-size:12px;color:var(--muted);text-align:center}
       <p class="note">La clé est conservée uniquement dans ce navigateur, sur cet appareil.</p>
     </details>
 
+    <details id="bikesCfg">
+      <summary>Mes vélos</summary>
+      <div id="bikeList"></div>
+      <p class="note">Pour ajouter un vélo, connectez-vous simplement à lui depuis l'onglet Trajet.</p>
+    </details>
+
+    <div class="bar" id="bikeFilterBar" style="display:none;align-items:center">
+      <label for="bikeFilter" style="margin:0">Afficher :</label>
+      <select id="bikeFilter"></select>
+    </div>
+
     <h2>Statistiques</h2>
     <div class="grid" id="statTiles"></div>
 
@@ -144,8 +167,8 @@ footer{margin:24px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '6.0';
-const APP_DATE = '6 novembre 2026';
+const APP_VERSION = '0.7 bêta';
+const APP_DATE = '7 novembre 2026';
 
 const $ = id => document.getElementById(id);
 $('verBadge').textContent = 'v' + APP_VERSION;
@@ -222,6 +245,7 @@ $('btnConnect').onclick = async () => {
   try{
     setStatus('status','Recherche du vélo…');
     device = await navigator.bluetooth.requestDevice({ filters:[{namePrefix:'Fiido'}], optionalServices:[SVC] });
+    if (!trip){ currentBike = null; picking = false; hidePicker(); $('bikeBar').style.display='none'; }
     device.addEventListener('gattserverdisconnected', onDisconnected);
     await setupGatt();
   }catch(e){ setStatus('status','Échec : '+e.message,'err'); log('Erreur : '+e); }
@@ -239,8 +263,9 @@ async function setupGatt(){
   await send(HANDSHAKE); await sleep(300);
   clearInterval(timer); timer = setInterval(rotation, 2000); rotation();
   manualDisconnect = false;
-  setStatus('status','Connecté à '+device.name,'ok'); log('Connecté à '+device.name);
-  $('btnConnect').disabled=true; $('btnDisconnect').disabled=false; $('btnTrip').disabled=false;
+  setStatus('status','Connecté à '+(currentBike ? bikeName(currentBike) : device.name),'ok'); log('Connecté à '+device.name);
+  $('btnConnect').disabled=true; $('btnDisconnect').disabled=false;
+  if (!trip) $('btnTrip').disabled = !currentBike;
 }
 
 $('btnDisconnect').onclick = () => { manualDisconnect = true; if(device && device.gatt.connected) device.gatt.disconnect(); };
@@ -298,6 +323,7 @@ function handle(f){
   // Le numéro de registre documenté désigne le DERNIER octet de la valeur
   if (addr===0x05 && p.length>=35){
     show('total', (be32(p,0x1C-5)/10).toFixed(1));
+    onOdo(num(state.total));
     show('trip',  (be16(p,0x20-5)/10).toFixed(1));
     show('speed', (be16(p,0x22-5)/10).toFixed(1));
     show('soc',   p[0x24-5]);
@@ -390,6 +416,106 @@ document.addEventListener('visibilitychange', () => {
   if (trip && document.visibilityState==='visible') keepAwake();
 });
 
+// ================= Vélos =================
+const lsGet = (k,d) => { try{ const v = JSON.parse(localStorage.getItem(k)); return v ?? d; }catch(e){ return d; } };
+const lsSet = (k,v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let bikes = lsGet('fiido_bikes', []);        // [{id, name, lastOdo, updatedAt}]
+let devMap = lsGet('fiido_devmap', {});      // identifiant Bluetooth (propre à cet appareil) -> vélo
+let currentBike = null, picking = false;
+const bikeById = id => bikes.find(b => b.id === id);
+const bikeName = id => bikeById(id)?.name || 'Vélo non identifié';
+function storeBikes(){ lsSet('fiido_bikes', bikes); renderBikes(); }
+
+// Appelé à chaque lecture du compteur kilométrique
+function onOdo(odo){
+  if (!device || !device.gatt.connected) return;
+  if (!currentBike && !picking){
+    const id = devMap[device.id];
+    if (id && bikeById(id)) selectBike(id); else showBikePicker(odo);
+  }
+  const b = currentBike && bikeById(currentBike);
+  if (b && odo != null && b.lastOdo !== odo){ b.lastOdo = odo; lsSet('fiido_bikes', bikes); }
+}
+
+function showBikePicker(odo){
+  picking = true;
+  // Suggestion : le vélo connu dont le dernier compteur est juste en dessous du compteur actuel (30 km d'écart au plus)
+  let sug = null, gap = Infinity;
+  for (const b of bikes)
+    if (b.lastOdo != null && odo != null && odo >= b.lastOdo - 0.1 && odo - b.lastOdo <= 30 && odo - b.lastOdo < gap){ gap = odo - b.lastOdo; sug = b; }
+  $('bikePicker').innerHTML =
+      `<b>Quel vélo est-ce ?</b>
+       <p class="note">Compteur de ce vélo : ${odo ?? '—'} km.${sug ? ` Il correspond à « ${esc(sug.name)} » (suggéré).` : ''}</p>`
+    + (bikes.length ? `<div>${bikes.map(b => `<button data-bike="${esc(b.id)}" class="${b === sug ? 'primary' : ''}">${esc(b.name)}</button>`).join('')}</div>` : '')
+    + `<label for="newBikeName">${bikes.length ? 'Ou ajouter un nouveau vélo' : 'Donnez un nom à ce vélo'}</label>
+       <div class="bar"><input id="newBikeName" placeholder="ex. Mon C11 Pro" maxlength="40" style="flex:1;width:auto">
+       <button id="btnNewBike" class="primary">Ajouter</button></div>`;
+  $('bikePicker').style.display = 'block';
+}
+function hidePicker(){ $('bikePicker').style.display = 'none'; $('bikePicker').innerHTML = ''; }
+
+$('bikePicker').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.bike) return selectBike(b.dataset.bike, true);
+  if (b.id === 'btnNewBike'){
+    const name = $('newBikeName').value.trim();
+    if (!name){ $('newBikeName').focus(); return; }
+    const first = bikes.length === 0;
+    const bike = { id: 'b' + Date.now().toString(36), name, lastOdo: num(state.total), updatedAt: Date.now() };
+    bikes.push(bike); storeBikes();
+    if (first){   // les trajets enregistrés avant la gestion des vélos sont rattachés au premier vélo
+      for (const t of await dbAll()) if (!t.bikeId){ t.bikeId = bike.id; t.synced = false; await dbPut(t); }
+    }
+    selectBike(bike.id, true);
+    syncAll();
+  }
+};
+
+function selectBike(id, remember=false){
+  currentBike = id; picking = false;
+  if (remember && device){ devMap[device.id] = id; lsSet('fiido_devmap', devMap); }
+  hidePicker();
+  $('bikeBar').style.display = 'flex';
+  $('bikeLabel').textContent = bikeName(id);
+  if (device && device.gatt.connected) setStatus('status', 'Connecté à ' + bikeName(id), 'ok');
+  if (!trip) $('btnTrip').disabled = !(device && device.gatt.connected);
+}
+
+function renameBike(id){
+  const b = bikeById(id); if (!b) return;
+  const name = prompt('Nouveau nom du vélo :', b.name);
+  if (!name || !name.trim()) return;
+  b.name = name.trim().slice(0, 40); b.updatedAt = Date.now();
+  storeBikes();
+  if (currentBike === id && device && device.gatt.connected) setStatus('status', 'Connecté à ' + b.name, 'ok');
+  renderHistory(); syncAll();
+}
+$('btnRename').onclick = () => currentBike && renameBike(currentBike);
+$('btnChangeBike').onclick = () => {
+  if (trip){ alert("Impossible de changer de vélo pendant un trajet."); return; }
+  if (device){ delete devMap[device.id]; lsSet('fiido_devmap', devMap); }
+  currentBike = null; $('bikeBar').style.display = 'none'; $('btnTrip').disabled = true;
+  showBikePicker(num(state.total));
+};
+
+function renderBikes(trips){
+  if (currentBike) $('bikeLabel').textContent = bikeName(currentBike);
+  const cur = lsGet('fiido_filter', '');
+  const opts = [['', 'Tous les vélos'], ...bikes.map(b => [b.id, b.name])];
+  if (trips && trips.some(t => !t.bikeId)) opts.push(['none', 'Vélo non identifié']);
+  $('bikeFilter').innerHTML = opts.map(([v,l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  $('bikeFilter').value = opts.some(o => o[0] === cur) ? cur : '';
+  $('bikeFilterBar').style.display = opts.length > 2 ? 'flex' : 'none';
+  $('bikeList').innerHTML = bikes.length ? bikes.map(b => {
+    const n = trips ? trips.filter(t => t.bikeId === b.id).length : null;
+    return `<div class="bikerow"><span><b>${esc(b.name)}</b><br><span class="note">${n != null ? n + ' trajet' + (n > 1 ? 's' : '') + ' · ' : ''}compteur ${b.lastOdo ?? '—'} km</span></span>
+      <button data-rename="${esc(b.id)}">Renommer</button></div>`;
+  }).join('') : '<p class="note">Aucun vélo pour l\'instant.</p>';
+}
+$('bikeList').onclick = e => { const b = e.target.closest('button[data-rename]'); if (b) renameBike(b.dataset.rename); };
+$('bikeFilter').onchange = () => { lsSet('fiido_filter', $('bikeFilter').value); renderHistory(); };
+
 // ================= Trajet =================
 let trip=null, tripClock=null;
 
@@ -397,7 +523,7 @@ $('btnTrip').onclick = () => trip ? stopTrip() : startTrip();
 
 function startTrip(){
   trip = { id:Date.now(), start:Date.now(), rows:[], points:[], gpsDist:0, vmax:0,
-           socStart:num(state.soc), odoStart:num(state.total), inProgress:true, appVersion:APP_VERSION };
+           socStart:num(state.soc), odoStart:num(state.total), inProgress:true, appVersion:APP_VERSION, bikeId:currentBike };
   $('btnTrip').textContent='Arrêter le trajet'; $('btnTrip').className='big rec';
   $('tripPanel').style.display='block'; $('recovered').style.display='none';
   if (line) line.setLatLngs([]);
@@ -414,7 +540,7 @@ async function stopTrip(){
   finalize(t, Date.now(), num(state.soc), num(state.total));
   await dbPut(t);
   $('btnTrip').textContent='Démarrer un trajet'; $('btnTrip').className='big';
-  $('btnTrip').disabled = !(device && device.gatt.connected);
+  $('btnTrip').disabled = !(device && device.gatt.connected) || !currentBike;
   log(`Trajet terminé : ${t.rows.length} mesures, ${t.points.length} points GPS`);
   syncAll();
 }
@@ -580,6 +706,32 @@ async function listRemote(){
   return (await r.json()).filter(f=>f.type==='file' && /^\d+\.json$/.test(f.name));
 }
 
+function fromB64(s){ const bin = atob(s.replace(/\s/g,'')); return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))); }
+async function syncBikes(){
+  const r = await gh('/contents/bikes.json');
+  let remote = [], sha = null;
+  if (r.ok){ const j = await r.json(); sha = j.sha; try{ remote = JSON.parse(fromB64(j.content)); }catch(e){} }
+  else if (r.status !== 404) throw new Error(ghError(r));
+  // Fusion : pour chaque vélo, la modification la plus récente gagne ; on garde le compteur le plus élevé
+  const m = new Map(remote.map(b => [b.id, b]));
+  for (const b of bikes){
+    const o = m.get(b.id);
+    const w = (!o || (b.updatedAt||0) >= (o.updatedAt||0)) ? {...b} : {...o};
+    const odos = [b.lastOdo, o?.lastOdo].filter(x => x != null);
+    w.lastOdo = odos.length ? Math.max(...odos) : null;
+    m.set(b.id, w);
+  }
+  const byId = (a,b) => a.id < b.id ? -1 : 1;
+  const merged = [...m.values()].sort(byId);
+  const changed = JSON.stringify(merged) !== JSON.stringify([...remote].sort(byId));
+  bikes = merged; storeBikes();
+  if (changed){
+    const p = await gh('/contents/bikes.json', {method:'PUT', body:{ message:'Mise à jour des vélos',
+      content: toB64(JSON.stringify(merged, null, 1)), ...(sha ? {sha} : {}) }});
+    if (!p.ok) throw new Error(ghError(p));
+  }
+}
+
 let syncing = false;
 async function syncAll(manual=false){
   if (!configured()){
@@ -591,6 +743,7 @@ async function syncAll(manual=false){
   syncing = true; $('btnSync').disabled = true;
   setStatus('syncStatus','Synchronisation…');
   try{
+    await syncBikes();
     const local = await dbAll();
     const justSent = new Set();
     const toSend = local.filter(t=>!t.inProgress && !t.synced);
@@ -643,7 +796,10 @@ async function loadTrips(){
 }
 
 async function renderHistory(){
-  const trips = await loadTrips();
+  const all = await loadTrips();
+  renderBikes(all);
+  const f = $('bikeFilter').value;
+  const trips = !f ? all : all.filter(t => f === 'none' ? !t.bikeId : t.bikeId === f);
   const totKm = trips.reduce((a,t)=>a+(t.summary.dist||0), 0);
   $('histTotals').textContent = trips.length
     ? `${trips.length} trajet${trips.length>1?'s':''} · ${totKm.toFixed(1)} km au total`
@@ -654,6 +810,7 @@ async function renderHistory(){
                + ' à ' + d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
     const bits = [`${s.dist.toFixed(1)} km`, fmtDur(s.dur), `${s.avg.toFixed(1)} km/h moy.`, `max ${s.vmax.toFixed(1)} km/h`];
     if (s.mode) bits.push(s.mode);
+    if (bikes.length > 1 || !t.bikeId) bits.unshift(`<b>${esc(bikeName(t.bikeId))}</b>`);
     if (s.used!=null) bits.push(`${s.used} % de batterie` + (s.cons!=null ? ` (${s.cons.toFixed(1)} %/km)` : ''));
     const badge = configured() ? `<span class="badge">${t.synced ? 'synchronisé' : 'à envoyer'}</span>` : '';
     return `<div class="hist" data-id="${t.id}">
@@ -753,7 +910,11 @@ function renderStats(trips){
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', renderHistory);
 
 // ================= Exports =================
-function stamp(t){ return new Date(t.start).toISOString().slice(0,16).replace(/[:T]/g,'-'); }
+function stamp(t){
+  const slug = (bikeById(t.bikeId)?.name || 'velo').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase() || 'velo';
+  return slug + '-' + new Date(t.start).toISOString().slice(0,16).replace(/[:T]/g,'-');
+}
 function download(name, content, type){
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([content],{type}));
@@ -770,7 +931,7 @@ function exportGpx(t){
     `<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${p.ele!=null?`<ele>${p.ele.toFixed(1)}</ele>`:''}<time>${new Date(p.t).toISOString()}</time></trkpt>`).join('\n');
   const gpx = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Fiido Explorer" xmlns="http://www.topografix.com/GPX/1/1">
-<trk><name>Trajet vélo ${new Date(t.start).toLocaleString('fr-FR')}</name><type>cycling</type><trkseg>
+<trk><name>${esc(bikeName(t.bikeId))} — ${new Date(t.start).toLocaleString('fr-FR')}</name><type>cycling</type><trkseg>
 ${pts}
 </trkseg></trk></gpx>`;
   download(`fiido-${stamp(t)}.gpx`, gpx, 'application/gpx+xml');

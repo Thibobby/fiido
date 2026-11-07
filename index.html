@@ -405,6 +405,8 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
       <input id="goal" type="number" min="0" step="5" inputmode="numeric" placeholder="ex. 60">
     </div>
 
+    <div id="appCard"></div>
+
     <h2>Données externes</h2>
     <div class="card muted sm">La température extérieure de chaque trajet est demandée au service météo gratuit Open-Meteo, en envoyant une position arrondie au kilomètre près. Aucune autre donnée ne quitte l'app, en dehors de ta synchronisation GitHub.</div>
 
@@ -429,12 +431,12 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.9.2 bêta';
+const APP_VERSION = '0.10 bêta';
 const APP_DATE = '7 novembre 2026';
 
 const $ = id => document.getElementById(id);
 $('verChip').textContent = 'v' + APP_VERSION;
-$('footer').textContent = `Fiido Explorer — version ${APP_VERSION} du ${APP_DATE}`;
+$('footer').textContent = `Fiido Explorer — version ${APP_VERSION} du ${APP_DATE}` + (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() ? ' · application Android' : ' · navigateur');
 
 function banner(id, html, cls=''){
   let el = $(id);
@@ -519,9 +521,59 @@ const state = {};
 function show(k,v){ state[k]=v; const el=$('v_'+k); if(el) el.textContent=v; }
 
 // ================= Connexion Bluetooth =================
-let device=null, tx=null, timer=null, busy=false, buf=[], manualDisconnect=false, connState='off';
+// Deux modes : navigateur (Bluetooth web de Chrome) ou application Android (module natif via Capacitor).
+// Dans l'application, le Bluetooth et le GPS continuent de fonctionner écran éteint.
+const Cap = window.Capacitor;
+const NATIVE = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
+const hexToBytes = h => new Uint8Array((String(h).match(/[0-9a-f]{2}/gi) || []).map(x => parseInt(x, 16)));
+
+let device=null, timer=null, busy=false, buf=[], manualDisconnect=false, connState='off', lastPoll=0;
 const rawFrames = {};
-const connected = () => !!(device && device.gatt.connected);
+const connected = () => !!(device && device.connected);
+
+// --- Couche « transport » : mêmes fonctions pour les deux modes
+const Web = {
+  tx: null,
+  async request(){
+    const d = await navigator.bluetooth.requestDevice({ filters:[{namePrefix:'Fiido'}], optionalServices:[SVC] });
+    const dev = {id: d.id, name: d.name, connected: false, web: d};
+    d.addEventListener('gattserverdisconnected', () => { dev.connected = false; onDisconnected(); });
+    return dev;
+  },
+  async open(dev){
+    const server = await dev.web.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    const rx = await svc.getCharacteristic(RX);
+    this.tx = await svc.getCharacteristic(TX);
+    await rx.startNotifications();
+    rx.addEventListener('characteristicvaluechanged', e => { const dv = e.target.value; onBytes(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength)); });
+  },
+  async write(dev, frame){ if (this.tx.writeValueWithoutResponse) await this.tx.writeValueWithoutResponse(frame); else await this.tx.writeValue(frame); },
+  async close(dev){ dev.web.gatt.disconnect(); },
+};
+const Native = {
+  ready: false, discL: null, notifL: null,
+  call: (method, opts = {}) => Cap.nativePromise('BluetoothLe', method, opts),
+  async request(){
+    if (!this.ready){ await this.call('initialize', {}); this.ready = true; }
+    const d = await this.call('requestDevice', {namePrefix:'Fiido', optionalServices:[SVC]});
+    return {id: d.deviceId, name: d.name || 'Fiido', connected: false};
+  },
+  async open(dev){
+    this.discL?.remove(); this.notifL?.remove();
+    this.discL = Cap.addListener('BluetoothLe', 'disconnected|' + dev.id, () => { if (dev.connected){ dev.connected = false; onDisconnected(); } });
+    await this.call('connect', {deviceId: dev.id, timeout: 15000});
+    this.notifL = Cap.addListener('BluetoothLe', `notification|${dev.id}|${SVC}|${RX}`, ev => onBytes(hexToBytes(ev && ev.value)));
+    await this.call('startNotifications', {deviceId: dev.id, service: SVC, characteristic: RX});
+  },
+  async write(dev, frame){
+    const value = hex(frame);
+    try{ await this.call('writeWithoutResponse', {deviceId: dev.id, service: SVC, characteristic: TX, value}); }
+    catch(e){ await this.call('write', {deviceId: dev.id, service: SVC, characteristic: TX, value}); }
+  },
+  async close(dev){ await this.call('disconnect', {deviceId: dev.id}); if (dev.connected){ dev.connected = false; onDisconnected(); } },
+};
+const BT = NATIVE ? Native : Web;
 
 function setConn(s){ connState = s; renderConn(); }
 function renderConn(){
@@ -534,62 +586,54 @@ function renderConn(){
 }
 
 $('btnConnect').onclick = async () => {
-  if (!navigator.bluetooth){ alert("Ce navigateur ne gère pas le Bluetooth web. Utilisez Chrome sur Android ou sur ordinateur."); return; }
+  if (!NATIVE && !navigator.bluetooth){ alert("Ce navigateur ne gère pas le Bluetooth web. Utilisez Chrome sur Android ou sur ordinateur, ou l'application Fiido Explorer."); return; }
   try{
     setConn('busy');
-    device = await navigator.bluetooth.requestDevice({ filters:[{namePrefix:'Fiido'}], optionalServices:[SVC] });
+    const dev = await BT.request();
     if (!trip){ currentBike = null; picking = false; hidePicker(); }
-    device.addEventListener('gattserverdisconnected', onDisconnected);
+    device = dev;
     await setupGatt();
-  }catch(e){ setConn(connected() ? 'ok' : 'off'); if (!/cancel/i.test(e.message)) alert('Connexion impossible : ' + e.message); log('Erreur : '+e); }
+  }catch(e){ setConn(connected() ? 'ok' : 'off'); if (!/cancel|annul/i.test(e.message || '')) alert('Connexion impossible : ' + (e.message || e)); log('Erreur : ' + (e.message || e)); }
 };
 
 async function setupGatt(){
   setConn('busy');
-  const server = await device.gatt.connect();
-  const svc = await server.getPrimaryService(SVC);
-  const rx = await svc.getCharacteristic(RX);
-  tx = await svc.getCharacteristic(TX);
-  await rx.startNotifications();
-  rx.addEventListener('characteristicvaluechanged', onNotify);
+  await BT.open(device);
+  device.connected = true;
   buf = [];
   await send(HANDSHAKE); await sleep(300);
   clearInterval(timer); timer = setInterval(rotation, 2000); rotation();
   manualDisconnect = false;
-  setConn('ok'); log('Connecté à '+device.name);
+  setConn('ok'); log('Connecté à ' + device.name + (NATIVE ? ' (application)' : ''));
   renderRide();
 }
 
-$('btnDisconnect').onclick = () => { manualDisconnect = true; if (connected()) device.gatt.disconnect(); };
+$('btnDisconnect').onclick = async () => { manualDisconnect = true; if (connected()) try{ await BT.close(device); }catch(e){ log('Déconnexion : ' + e.message); } };
 
 async function onDisconnected(){
   clearInterval(timer); timer=null; buf=[];
   log('Déconnecté');
   if (trip && !manualDisconnect){
     setConn('lost');
-    for (let i=1; i<=10 && trip && !connected(); i++){
+    for (let i=1; i<=20 && trip && !connected(); i++){
       await sleep(3000);
-      try{ await setupGatt(); return; }catch(e){ log(`Reconnexion échouée (${i}/10) : `+e.message); setConn('lost'); }
+      try{ await setupGatt(); return; }catch(e){ log(`Reconnexion échouée (${i}/20) : ` + (e.message || e)); setConn('lost'); }
     }
   } else setConn('off');
   renderRide();
 }
 
-async function send(frame){
-  if (tx.writeValueWithoutResponse) await tx.writeValueWithoutResponse(frame);
-  else await tx.writeValue(frame);
-}
+async function send(frame){ await BT.write(device, frame); }
 async function rotation(){
   if (busy || !connected()) return;
-  busy=true;
+  busy=true; lastPoll = Date.now();
   try{ for(const f of ROTATION){ await send(f); await sleep(150); } }
-  catch(e){ log('Erreur envoi : '+e.message); }
+  catch(e){ log('Erreur envoi : ' + (e.message || e)); }
   busy=false;
 }
 
-function onNotify(e){
-  const dv = e.target.value;
-  buf.push(...new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+function onBytes(bytes){
+  buf.push(...bytes);
   while (buf.length >= 6){
     if (buf[0]!==0x46 || buf[1]!==0x64){ buf.shift(); continue; }
     const total = buf[3] + 6;
@@ -651,14 +695,41 @@ function haversine(a,b){
   const h=Math.sin(dLat/2)**2 + Math.cos(toR(a.lat))*Math.cos(toR(b.lat))*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.sqrt(h));
 }
-function startGps(){
-  if (!('geolocation' in navigator)){ $('cGps').textContent='GPS indisponible'; return; }
+async function startGps(){
   $('cGps').textContent='GPS…';
+  if (NATIVE){
+    // Android 13+ : la notification « trajet en cours » demande une autorisation
+    try{ await Cap.nativePromise('LocalNotifications', 'requestPermissions', {}); }catch(e){ log('Notifications : ' + (e.message || e)); }
+    gpsWatch = Cap.nativeCallback('BackgroundGeolocation', 'addWatcher', {
+      backgroundTitle: 'Fiido Explorer — trajet en cours',
+      backgroundMessage: 'Enregistrement du vélo et du GPS. Touchez pour revenir à l’app.',
+      requestPermissions: true, stale: false, distanceFilter: 0,
+    }, (loc, err) => {
+      if (err){
+        $('cGps').textContent = 'GPS : erreur'; log('GPS : ' + (err.message || err.code));
+        if (err.code === 'NOT_AUTHORIZED' && confirm("L'app a besoin de ta position pour enregistrer le trajet. Ouvrir les réglages ?"))
+          Cap.nativePromise('BackgroundGeolocation', 'openSettings', {});
+        return;
+      }
+      if (!loc) return;
+      onFix({timestamp: loc.time || Date.now(), coords: {latitude: loc.latitude, longitude: loc.longitude,
+        accuracy: loc.accuracy ?? 99, altitude: loc.altitude, speed: loc.speed}});
+      // écran éteint, les minuteries de la page ralentissent : chaque position GPS relance la lecture du vélo
+      if (Date.now() - lastPoll > 1900) rotation();
+    });
+    return;
+  }
+  if (!('geolocation' in navigator)){ $('cGps').textContent='GPS indisponible'; return; }
   gpsWatch = navigator.geolocation.watchPosition(onFix,
     e => { $('cGps').textContent='GPS : erreur'; log('GPS : '+e.message); },
     {enableHighAccuracy:true, maximumAge:1000, timeout:20000});
 }
-function stopGps(){ if (gpsWatch!==null) navigator.geolocation.clearWatch(gpsWatch); gpsWatch=null; }
+function stopGps(){
+  if (gpsWatch === null) return;
+  if (NATIVE) Cap.nativePromise('BackgroundGeolocation', 'removeWatcher', {id: gpsWatch}).catch(e => log('GPS : ' + (e.message || e)));
+  else navigator.geolocation.clearWatch(gpsWatch);
+  gpsWatch = null;
+}
 function onFix(pos){
   const c = pos.coords;
   fix = {t:pos.timestamp, lat:c.latitude, lon:c.longitude, acc:c.accuracy, ele:c.altitude, gspeed:c.speed};
@@ -699,13 +770,14 @@ $('btnFollow').onclick = () => { follow=true; if (fix && map) map.setView([fix.l
 // ================= Écran toujours allumé =================
 let wakeLock=null;
 async function keepAwake(){
+  if (NATIVE) return;   // dans l'application, l'enregistrement continue écran éteint
   try{ if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }
   catch(e){ log('Écran allumé : '+e.message); }
 }
 let hiddenAt = null;
 const fmtGap = s => s < 60 ? `${s} s` : fmtHM(s);
 document.addEventListener('visibilitychange', () => {
-  if (!trip) return;
+  if (!trip || NATIVE) return;
   if (document.visibilityState === 'hidden'){ hiddenAt = Date.now(); return; }
   keepAwake();
   if (hiddenAt){
@@ -1717,7 +1789,17 @@ $('health').onclick = e => {
 $('records').onclick = e => { const b = e.target.closest('[data-open]'); if (b) openDetail(Number(b.dataset.open)); };
 
 // ================= Réglages =================
+function renderAppCard(){
+  $('appCard').innerHTML = NATIVE
+    ? `<h2>Application Android</h2><div class="card" style="display:flex;flex-direction:column;gap:10px">
+        <div class="sm">L'enregistrement continue écran éteint et pendant que tu utilises d'autres applications. Une notification « Trajet en cours » le signale.</div>
+        <div class="muted xs" style="line-height:1.5">Pour qu'Android ne l'interrompe pas, règle la batterie de l'app sur <b style="color:var(--ink)">« Sans restriction »</b> : bouton ci-dessous, puis « Batterie » (ou « Utilisation de la batterie par l'appli »).</div>
+        <button class="btn" id="btnAppSettings">Ouvrir les réglages de l'app</button></div>`
+    : `<h2>Application Android</h2><div class="card muted sm">Tu utilises la version navigateur : l'enregistrement s'arrête si l'écran s'éteint ou si tu changes d'application. L'application Android Fiido Explorer n'a pas cette limite.</div>`;
+  if (NATIVE) $('btnAppSettings').onclick = () => Cap.nativePromise('BackgroundGeolocation', 'openSettings', {}).catch(e => alert(e.message || e));
+}
 function renderSettings(){
+  renderAppCard();
   $('bikeList').innerHTML = bikes.length ? bikes.map(b => {
     const n = tripsCache.filter(t => t.bikeId === b.id).length;
     return `<div class="bikerow"><div><b>${esc(b.name)}</b><div class="muted xs">${n} trajet${n>1?'s':''} · compteur ${fr(b.lastOdo)} km</div></div>
@@ -1763,6 +1845,7 @@ function stamp(t){
   return slug + '-' + new Date(t.start).toISOString().slice(0,16).replace(/[:T]/g,'-');
 }
 function download(name, content, type){
+  if (NATIVE){ alert("Dans l'application, l'export de fichiers n'est pas encore disponible. Les trajets étant synchronisés, exporte-les depuis Chrome ou depuis ton PC."); return; }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([content],{type}));
   a.download = name; a.click();

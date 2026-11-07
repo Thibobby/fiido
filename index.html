@@ -431,7 +431,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.10 bêta';
+const APP_VERSION = '0.10.1 bêta';
 const APP_DATE = '7 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -567,7 +567,8 @@ const Native = {
     await this.call('startNotifications', {deviceId: dev.id, service: SVC, characteristic: RX});
   },
   async write(dev, frame){
-    const value = hex(frame);
+    // le module natif attend l'hexadécimal collé, sans espaces (« 4664550d0d… »)
+    const value = Array.from(frame, b => b.toString(16).padStart(2, '0')).join('');
     try{ await this.call('writeWithoutResponse', {deviceId: dev.id, service: SVC, characteristic: TX, value}); }
     catch(e){ await this.call('write', {deviceId: dev.id, service: SVC, characteristic: TX, value}); }
   },

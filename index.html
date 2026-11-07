@@ -64,6 +64,16 @@ input{font:inherit;width:100%;padding:10px;border-radius:10px;border:1px solid v
 select{font:inherit;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
 .bikerow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
 .bikerow button{padding:6px 10px;font-size:14px}
+.hist{cursor:pointer}.hist:hover{border-color:var(--accent)}
+#btnBack{margin-bottom:12px}
+.dhead h3{font-size:20px;margin:0}.dhead h3::first-letter{text-transform:uppercase}
+.dhead p{margin:2px 0 12px;color:var(--muted);font-size:14px}
+#dMap{height:340px;border-radius:12px;border:1px solid var(--line);margin-bottom:6px;z-index:0}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:14px}
+.legend i{display:inline-block;width:18px;height:5px;border-radius:3px;margin-right:5px;vertical-align:middle}
+.modes{display:flex;height:28px;border-radius:8px;overflow:hidden;border:1px solid var(--line);margin:4px 0 6px}
+.modes div{display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;font-weight:600;white-space:nowrap;overflow:hidden}
+.tile .v.sm{font-size:20px}
 footer{margin:24px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 </style>
 </head>
@@ -162,12 +172,36 @@ footer{margin:24px 0 8px;font-size:12px;color:var(--muted);text-align:center}
     <div id="history"></div>
   </section>
 
+  <!-- ===================== FICHE D'UN TRAJET ===================== -->
+  <section class="tab" id="tab-detail">
+    <button id="btnBack">← Retour à l'historique</button>
+    <div class="dhead"><h3 id="dTitle"></h3><p id="dSub"></p></div>
+    <div id="dMap"></div>
+    <div class="legend" id="dLegend"></div>
+    <div class="grid" id="dTiles"></div>
+
+    <div class="chart" id="dModesBox"><h3>Niveaux d'assistance</h3><p>Temps passé en roulant à chaque niveau</p>
+      <div class="modes" id="dModes"></div><div class="note" id="dModesTxt"></div></div>
+
+    <p class="note" id="dHint">Touchez ou survolez un graphique pour situer le moment sur la carte.</p>
+    <div class="chart"><h3>Vitesse</h3><p>km/h, mesurée par le vélo</p><div class="cv"><canvas id="dSpeed"></canvas></div></div>
+    <div class="chart"><h3>Batterie</h3><p>%</p><div class="cv"><canvas id="dSoc"></canvas></div></div>
+    <div class="chart" id="dEleBox"><h3>Altitude</h3><p>m, selon le GPS du téléphone</p><div class="cv"><canvas id="dEle"></canvas></div></div>
+    <div class="chart" id="dTempBox"><h3>Température du moteur</h3><p>°C</p><div class="cv"><canvas id="dTemp"></canvas></div></div>
+
+    <div class="ha" style="margin-top:12px">
+      <button id="dCsv">Exporter CSV</button>
+      <button id="dGpx">Exporter GPX</button>
+      <button id="dDel">Supprimer ce trajet</button>
+    </div>
+  </section>
+
   <footer id="footer"></footer>
 </main>
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.7 bêta';
+const APP_VERSION = '0.8 bêta';
 const APP_DATE = '7 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -189,9 +223,13 @@ async function checkUpdate(){
 }
 
 // ================= Onglets =================
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  showTab(b.dataset.tab);
+});
 function showTab(name){
-  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab===name));
+  const navName = name === 'detail' ? 'history' : name;
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab===navName));
   document.querySelectorAll('.tab').forEach(s => s.classList.toggle('on', s.id==='tab-'+name));
   if (name==='ride' && map) setTimeout(()=>map.invalidateSize(), 50);
   if (name==='history') renderHistory();
@@ -817,7 +855,7 @@ async function renderHistory(){
       <div class="hh">${when}${badge}</div>
       <div class="hs">${bits.join(' · ')}</div>
       <div class="ha">
-        <button data-act="view" ${t.points.length?'':'disabled'}>Voir sur la carte</button>
+        <button data-act="view" class="primary">Voir le détail</button>
         <button data-act="csv">CSV</button>
         <button data-act="gpx" ${t.points.length?'':'disabled'}>GPX</button>
         <button data-act="del">Supprimer</button>
@@ -827,27 +865,197 @@ async function renderHistory(){
 }
 
 $('history').onclick = async e => {
-  const b = e.target.closest('button'); if (!b) return;
-  const id = Number(b.closest('.hist').dataset.id);
+  const card = e.target.closest('.hist'); if (!card) return;
+  const id = Number(card.dataset.id);
+  const b = e.target.closest('button');
+  if (!b || b.dataset.act==='view') return openDetail(id);
   const t = (await dbAll()).find(x=>x.id===id); if (!t) return;
   const act = b.dataset.act;
-  if (act==='view') showTrip(t);
   if (act==='csv') exportCsv(t);
   if (act==='gpx') exportGpx(t);
   if (act==='del' && confirm(t.synced ? 'Supprimer définitivement ce trajet, sur cet appareil ET sur GitHub ?' : 'Supprimer définitivement ce trajet ?')) deleteTrip(t);
 };
 
-function showTrip(t){
-  showTab('ride');
-  if (!ensureMap()) return;
-  setTimeout(() => {
-    map.invalidateSize();
-    follow = false;
-    if (map.hasLayer(marker)) map.removeLayer(marker);
-    line.setLatLngs(t.points.map(p=>[p.lat,p.lon]));
-    map.fitBounds(line.getBounds(), {padding:[20,20]});
-    $('map').scrollIntoView({behavior:'smooth', block:'center'});
-  }, 60);
+// ================= Fiche d'un trajet =================
+let detailTrip = null, dmap = null, dLayer = null, dMarker = null, dRows = [], dPoints = [];
+const SPEED_BANDS = [
+  {max:10,  color:'#3b82f6', label:'moins de 10 km/h'},
+  {max:20,  color:'#10b981', label:'10 à 20 km/h'},
+  {max:25,  color:'#f59e0b', label:'20 à 25 km/h'},
+  {max:1e9, color:'#ef4444', label:'plus de 25 km/h'},
+];
+const MODE_COLORS = {'Arrêt':'#94a3b8','Éco':'#10b981','Sport':'#f59e0b','Turbo':'#ef4444'};
+const band = v => SPEED_BANDS.find(b => v < b.max);
+
+async function openDetail(id, push=true){
+  const t = (await dbAll()).find(x => x.id === id);
+  if (!t){ if (location.hash) history.replaceState(null,'',location.pathname+location.search); showTab('history'); return; }
+  if (push) history.pushState({detail:id}, '', '#trajet-' + id);
+  showTab('detail');
+  window.scrollTo(0, 0);
+  renderDetail(t);
+}
+window.addEventListener('popstate', () => {
+  const m = location.hash.match(/^#trajet-(\d+)$/);
+  if (m) openDetail(Number(m[1]), false);
+  else if ($('tab-detail').classList.contains('on')) showTab('history');
+});
+$('btnBack').onclick = () => {
+  if (history.state && history.state.detail) history.back();
+  else { history.replaceState(null,'',location.pathname+location.search); showTab('history'); }
+};
+$('dCsv').onclick = () => detailTrip && exportCsv(detailTrip);
+$('dGpx').onclick = () => detailTrip && exportGpx(detailTrip);
+$('dDel').onclick = async () => {
+  const t = detailTrip; if (!t) return;
+  if (!confirm(t.synced ? 'Supprimer définitivement ce trajet, sur cet appareil ET sur GitHub ?' : 'Supprimer définitivement ce trajet ?')) return;
+  await deleteTrip(t);
+  if (!(await dbAll()).some(x => x.id === t.id)) $('btnBack').click();
+};
+
+// Calculs détaillés à partir des mesures enregistrées
+function tripDetails(t){
+  const rows = (t.rows || []).map(r => ({ t:Date.parse(r[0]), speed:num(r[1]), soc:num(r[2]), gear:r[5]||null,
+    temp:num(r[8]), ele:num(r[14]) })).filter(r => !isNaN(r.t));
+  let moving = 0; const modes = {};
+  for (let i = 1; i < rows.length; i++){
+    const dt = Math.min(rows[i].t - rows[i-1].t, 10000) / 1000;
+    if (rows[i].speed > 1){ moving += dt; if (rows[i].gear) modes[rows[i].gear] = (modes[rows[i].gear]||0) + dt; }
+  }
+  // dénivelé positif, avec un seuil de 3 m pour ignorer les petites variations du GPS
+  let gain = 0, ref = null;
+  for (const e of (t.points||[]).map(p => p.ele).filter(e => e != null)){
+    if (ref == null) ref = e;
+    else if (e - ref >= 3){ gain += e - ref; ref = e; }
+    else if (ref - e >= 3) ref = e;
+  }
+  const socs = rows.map(r => r.soc).filter(v => v != null);
+  const temps = rows.map(r => r.temp).filter(v => v != null);
+  return { rows, moving, modes, gain: (t.points||[]).some(p => p.ele != null) ? gain : null,
+    socStart: t.socStart ?? socs[0] ?? null, socEnd: socs.length ? socs[socs.length-1] : null,
+    tempMax: temps.length ? Math.max(...temps) : null };
+}
+
+function renderDetail(t){
+  detailTrip = t;
+  const s = t.summary, D = tripDetails(t), d = new Date(t.start);
+  $('dTitle').textContent = d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
+  const hm = x => new Date(x).toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+  $('dSub').textContent = `${bikeName(t.bikeId)} · de ${hm(t.start)} à ${hm(t.end || t.start)}`;
+
+  const avgMoving = D.moving > 60 ? s.dist / (D.moving/3600) : null;
+  $('dTiles').innerHTML = [
+    ['Distance', s.dist.toFixed(2), 'km'],
+    ['Durée totale', fmtDur(s.dur), ''],
+    ['Temps en mouvement', fmtDur(Math.round(D.moving)), ''],
+    ['Vitesse moyenne', (avgMoving ?? s.avg).toFixed(1), 'km/h'],
+    ['Vitesse max', s.vmax.toFixed(1), 'km/h'],
+    ['Batterie', (D.socStart != null && D.socEnd != null) ? `${D.socStart} → ${D.socEnd}` : '—', '%'],
+    ['Batterie utilisée', s.used ?? '—', '%'],
+    ['Consommation', s.cons != null ? s.cons.toFixed(2) : '—', '%/km'],
+    ['Dénivelé positif', D.gain != null ? Math.round(D.gain) : '—', 'm'],
+    ['Temp. moteur max', D.tempMax ?? '—', '°C'],
+  ].map(([k,v,u]) => `<div class="tile"><div class="k">${k}</div><div class="v ${String(v).length>7?'sm':''}">${v}<span class="u">${u}</span></div></div>`).join('');
+  if (s.cons != null && s.dist < MIN_CONS_KM)
+    $('dTiles').insertAdjacentHTML('beforeend', `<p class="note" style="grid-column:1/-1">Trajet court : la batterie n'étant mesurée qu'au pourcent près, la consommation est peu fiable.</p>`);
+
+  // Temps par niveau d'assistance
+  const totalModes = Object.values(D.modes).reduce((a,b) => a+b, 0);
+  $('dModesBox').style.display = totalModes > 0 ? 'block' : 'none';
+  const order = ['Éco','Sport','Turbo','Arrêt'];
+  const entries = Object.entries(D.modes).sort((a,b) => (order.indexOf(a[0])+99*(order.indexOf(a[0])<0)) - (order.indexOf(b[0])+99*(order.indexOf(b[0])<0)));
+  $('dModes').innerHTML = entries.map(([m,sec]) => { const pct = 100*sec/totalModes;
+    return `<div style="width:${pct}%;background:${MODE_COLORS[m]||'#64748b'}" title="${esc(m)}">${pct >= 12 ? esc(m) : ''}</div>`; }).join('');
+  $('dModesTxt').textContent = entries.map(([m,sec]) => `${m} : ${Math.round(sec/60)} min (${Math.round(100*sec/totalModes)} %)`).join(' · ');
+
+  renderDetailMap(t);
+  renderDetailCharts(t, D);
+}
+
+function renderDetailMap(t){
+  dPoints = t.points || [];
+  const box = $('dMap');
+  if (!dPoints.length || !window.L){
+    box.style.display = 'none'; $('dLegend').innerHTML = dPoints.length ? '' : '<span>Pas de tracé GPS pour ce trajet.</span>';
+    return;
+  }
+  box.style.display = 'block';
+  if (!dmap){
+    dmap = L.map('dMap');
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© contributeurs OpenStreetMap'}).addTo(dmap);
+    dLayer = L.layerGroup().addTo(dmap);
+    dMarker = L.circleMarker([0,0], {radius:8, color:'#fff', weight:3, fillColor:'#111827', fillOpacity:1});
+  }
+  dLayer.clearLayers();
+  if (dmap.hasLayer(dMarker)) dmap.removeLayer(dMarker);
+  // Tracé découpé en tronçons colorés selon la vitesse
+  let run = [], runBand = null;
+  const flush = () => { if (run.length > 1) L.polyline(run, {color:runBand.color, weight:6, opacity:.9}).addTo(dLayer); };
+  for (let i = 1; i < dPoints.length; i++){
+    const a = dPoints[i-1], b = dPoints[i], dt = (b.t - a.t) / 1000;
+    const v = dt > 0 ? haversine(a, b) / dt * 3.6 : 0;
+    const bd = band(Math.min(v, 80));
+    if (bd !== runBand){ flush(); run = [[a.lat, a.lon]]; runBand = bd; }
+    run.push([b.lat, b.lon]);
+  }
+  flush();
+  const first = dPoints[0], last = dPoints[dPoints.length-1];
+  L.circleMarker([first.lat, first.lon], {radius:7, color:'#fff', weight:3, fillColor:'#16a34a', fillOpacity:1}).bindTooltip('Départ').addTo(dLayer);
+  L.circleMarker([last.lat, last.lon], {radius:7, color:'#fff', weight:3, fillColor:'#dc2626', fillOpacity:1}).bindTooltip('Arrivée').addTo(dLayer);
+  $('dLegend').innerHTML = SPEED_BANDS.map(b => `<span><i style="background:${b.color}"></i>${b.label}</span>`).join('')
+    + '<span><i style="background:#16a34a;width:10px;height:10px;border-radius:50%"></i>départ</span><span><i style="background:#dc2626;width:10px;height:10px;border-radius:50%"></i>arrivée</span>';
+  setTimeout(() => { dmap.invalidateSize(); dmap.fitBounds(L.latLngBounds(dPoints.map(p => [p.lat, p.lon])), {padding:[24,24]}); }, 60);
+}
+
+// Situe sur la carte le moment survolé dans un graphique
+function pointAt(time){
+  if (!dPoints.length) return null;
+  let lo = 0, hi = dPoints.length - 1;
+  while (lo < hi){ const mid = (lo + hi) >> 1; if (dPoints[mid].t < time) lo = mid + 1; else hi = mid; }
+  if (lo > 0 && Math.abs(dPoints[lo-1].t - time) < Math.abs(dPoints[lo].t - time)) lo--;
+  return dPoints[lo];
+}
+function highlight(i){
+  const r = dRows[i]; if (!r || !dmap) return;
+  const p = pointAt(r.t); if (!p) return;
+  if (!dmap.hasLayer(dMarker)) dMarker.addTo(dmap);
+  dMarker.setLatLng([p.lat, p.lon]);
+}
+
+function renderDetailCharts(t, D){
+  // au-delà de 1500 mesures, on n'en garde qu'une partie pour que les graphiques restent fluides
+  const step = Math.max(1, Math.ceil(D.rows.length / 1500));
+  dRows = D.rows.filter((_, i) => i % step === 0);
+  const t0 = t.start;
+  const labels = dRows.map(r => { const sec = Math.max(0, Math.round((r.t - t0)/1000));
+    return sec >= 3600 ? fmtDur(sec) : `${Math.floor(sec/60)}:${String(sec%60).padStart(2,'0')}`; });
+  const hasEle = dRows.some(r => r.ele != null), hasTemp = dRows.some(r => r.temp != null);
+  $('dEleBox').style.display = hasEle ? 'block' : 'none';
+  $('dTempBox').style.display = hasTemp ? 'block' : 'none';
+  $('dHint').style.display = dPoints.length ? 'block' : 'none';
+  if (!window.Chart) return;
+  const grid = css('--line');
+  Chart.defaults.color = css('--muted'); Chart.defaults.font.family = 'system-ui, sans-serif';
+  const draw = (id, data, unit, color, fill=false, digits=1) => {
+    charts[id]?.destroy();
+    charts[id] = new Chart($(id), {
+      type:'line',
+      data:{ labels, datasets:[{ data, borderColor:color, backgroundColor:color+'33', fill, borderWidth:2,
+        pointRadius:0, pointHoverRadius:4, tension:.2, spanGaps:true }]},
+      options:{ responsive:true, maintainAspectRatio:false, animation:false,
+        interaction:{mode:'index', intersect:false},
+        onHover:(e, els) => { if (els.length) highlight(els[0].index); },
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{
+          title: items => 'à ' + items[0].label,
+          label: c => c.parsed.y == null ? '' : `${c.parsed.y.toFixed(digits)} ${unit}` }}},
+        scales:{ x:{ grid:{display:false}, ticks:{maxTicksLimit:6, maxRotation:0} },
+                 y:{ grid:{color:grid}, ...(unit==='%' ? {min:0, max:100} : {}), ...(unit==='km/h' ? {beginAtZero:true} : {}) } } }
+    });
+  };
+  draw('dSpeed', dRows.map(r => r.speed), 'km/h', '#0f766e', true);
+  draw('dSoc', dRows.map(r => r.soc), '%', '#3b82f6', false, 0);
+  if (hasEle) draw('dEle', dRows.map(r => r.ele), 'm', '#8b5cf6', true, 0);
+  if (hasTemp) draw('dTemp', dRows.map(r => r.temp), '°C', '#ef4444', false, 0);
 }
 
 // ================= Statistiques et graphiques =================
@@ -970,6 +1178,8 @@ ${pts}
   }catch(e){ log('Récupération impossible : '+e.message); }
   if (configured()) setStatus('syncStatus','Synchronisation configurée.');
   await renderHistory();
+  const hm = location.hash.match(/^#trajet-(\d+)$/);
+  if (hm) openDetail(Number(hm[1]), false);
   syncAll();
 })();
 </script>

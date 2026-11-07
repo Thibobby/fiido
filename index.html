@@ -77,7 +77,7 @@ body.cockpit .tabbar{display:none}
 .bname{font-family:var(--num);font-size:22px;font-weight:600}
 .ringwrap{position:relative;width:112px;height:112px;flex:none}
 .ringwrap .lbl{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.big{font-family:var(--num);font-weight:700;line-height:1.05}
+.big{font-family:var(--num);font-weight:700;line-height:1.05;white-space:nowrap}
 .start{height:72px;border-radius:20px;border:none;background:var(--accent);color:#0B0E10;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:10px}
 .picker{display:none;background:var(--s2);border:2px solid var(--accent);border-radius:16px;padding:14px}
 .picker .opts{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
@@ -160,6 +160,8 @@ body.cockpit .tabbar{display:none}
 .rec .v{font-family:var(--num);font-size:18px;font-weight:600;white-space:nowrap}
 
 /* ---------- Réglages ---------- */
+.hbar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}.hbar i{display:block;height:100%;border-radius:4px;background:var(--accent)}
+.chrow{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;border-top:1px solid var(--line);padding-top:6px}
 .bikerow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .bikerow:first-child{border-top:none}
 .diag{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:10px}
@@ -202,7 +204,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
         <div class="grid3">
           <div class="tile s2"><div class="d" style="margin:0">Assistance</div><div style="font-weight:600;margin-top:2px" id="rGear">—</div></div>
           <div class="tile s2"><div class="d" style="margin:0">Éclairage</div><div style="font-weight:600;margin-top:2px" id="rLight">—</div></div>
-          <div class="tile s2"><div class="d" style="margin:0">Moteur</div><div style="font-weight:600;margin-top:2px" id="rTemp">—</div></div>
+          <div class="tile s2"><div class="d" style="margin:0">Limiteur</div><div style="font-weight:600;margin-top:2px" id="rLimit">—</div></div>
         </div>
         <div class="row wrap" style="gap:4px 14px;margin:-6px 0 -10px">
           <button class="link" id="btnRename">Renommer</button>
@@ -248,7 +250,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     <div class="grid3">
       <div class="tile"><div class="k">Distance</div><div class="v"><span id="cDist">0,0</span><span class="u">km</span></div></div>
       <div class="tile"><div class="k">Moyenne</div><div class="v"><span id="cAvg">—</span><span class="u">km/h</span></div></div>
-      <div class="tile"><div class="k">Moteur</div><div class="v"><span id="cTemp">—</span><span class="u">°C</span></div></div>
+      <div class="tile"><div class="k">Max</div><div class="v"><span id="cMax">—</span><span class="u">km/h</span></div></div>
     </div>
     <div class="cmap dark-tiles">
       <div id="map"></div>
@@ -281,6 +283,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     </div>
     <div class="dbody">
       <div><div class="muted sm" id="dSub"></div><h1 style="font-size:26px;margin-top:2px" id="dTitle"></h1></div>
+      <div id="dGaps"></div>
       <div class="legend" id="dLegend"></div>
       <div class="card grid3" id="dHero" style="padding:16px"></div>
       <div class="grid2" id="dTiles"></div>
@@ -358,6 +361,11 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
       <div class="muted xs">Calculé à partir de la capacité de la batterie (48 V × 11,6 Ah ≈ 557 Wh) et des pourcentages consommés.</div>
     </div>
 
+    <div class="card" id="healthCard" style="display:flex;flex-direction:column;gap:12px">
+      <h3>Santé de la batterie</h3>
+      <div id="health" style="display:flex;flex-direction:column;gap:18px"></div>
+    </div>
+
     <div class="card" style="display:flex;flex-direction:column;padding-bottom:4px">
       <h3 style="margin-bottom:6px">Records</h3>
       <div id="records"></div>
@@ -397,6 +405,9 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
       <input id="goal" type="number" min="0" step="5" inputmode="numeric" placeholder="ex. 60">
     </div>
 
+    <h2>Données externes</h2>
+    <div class="card muted sm">La température extérieure de chaque trajet est demandée au service météo gratuit Open-Meteo, en envoyant une position arrondie au kilomètre près. Aucune autre donnée ne quitte l'app, en dehors de ta synchronisation GitHub.</div>
+
     <h2>Diagnostic</h2>
     <details class="card">
       <summary>Données brutes du vélo</summary>
@@ -418,7 +429,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.9 bêta';
+const APP_VERSION = '0.9.1 bêta';
 const APP_DATE = '7 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -611,6 +622,7 @@ function handle(f){
     show('motor', (flags & 0x80) ? 'Allumé' : 'Éteint');
     show('light', (flags & 0x08) ? 'Allumé' : 'Éteint');
     show('limit', (flags & 0x20) ? 'Actif' : 'Inactif');
+    logSoc();
     record();
   }
   if (addr===0x96 && p.length>=12){
@@ -690,7 +702,20 @@ async function keepAwake(){
   try{ if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }
   catch(e){ log('Écran allumé : '+e.message); }
 }
-document.addEventListener('visibilitychange', () => { if (trip && document.visibilityState==='visible') keepAwake(); });
+let hiddenAt = null;
+const fmtGap = s => s < 60 ? `${s} s` : fmtHM(s);
+document.addEventListener('visibilitychange', () => {
+  if (!trip) return;
+  if (document.visibilityState === 'hidden'){ hiddenAt = Date.now(); return; }
+  keepAwake();
+  if (hiddenAt){
+    const sec = Math.round((Date.now() - hiddenAt) / 1000); hiddenAt = null;
+    if (sec > 10){
+      banner('gapBanner', `<span>L'app était en arrière-plan : <b>${fmtGap(sec)}</b> non enregistrées. La distance restera juste grâce au compteur du vélo.</span><button class="btn" id="gapOk">OK</button>`);
+      $('gapOk').onclick = () => banner('gapBanner', '');
+    }
+  }
+});
 
 // ================= Vélos =================
 let bikes = lsGet('fiido_bikes', []);        // [{id, name, lastOdo, updatedAt}]
@@ -699,6 +724,48 @@ let currentBike = null, picking = false;
 const bikeById = id => bikes.find(b => b.id === id);
 const bikeName = id => bikeById(id)?.name || 'Vélo non identifié';
 function storeBikes(){ lsSet('fiido_bikes', bikes); renderConn(); if (screen==='settings') renderSettings(); }
+
+// Journal de batterie : le vélo n'indique la batterie que par paliers ; on note le compteur
+// à chaque changement de palier pour mesurer la consommation sur plusieurs trajets.
+function logSoc(){
+  const b = currentBike && bikeById(currentBike), soc = num(state.soc), odo = num(state.total);
+  if (!b || soc == null || odo == null) return;
+  b.socLog ??= [];
+  const last = b.socLog[b.socLog.length-1];
+  if (last && last.soc === soc) return;
+  if (last && odo < last.odo - 0.05) return;            // lecture incohérente
+  b.socLog.push({t: Date.now(), odo, soc});
+  if (b.socLog.length > 2000) b.socLog.splice(0, b.socLog.length - 2000);
+  lsSet('fiido_bikes', bikes);
+}
+// Fenêtres de décharge : on cumule les baisses jusqu'à 10 % ; une hausse (recharge) coupe la fenêtre
+function journalWindows(log, minDrop=10){
+  const out = []; let start = null, prev = null;
+  for (const e of log || []){
+    if (!prev || e.soc > prev.soc){ start = e; prev = e; continue; }
+    prev = e;
+    const drop = start.soc - e.soc, km = e.odo - start.odo;
+    if (drop >= minDrop && km > 0.5){ out.push({t: e.t, km, drop, cons: drop/km}); start = e; }
+  }
+  return out;
+}
+function journalStats(ids){
+  let km = 0, drop = 0, charges = 0; const windows = [];
+  for (const id of ids){
+    const log = bikeById(id)?.socLog || [];
+    const w = journalWindows(log); windows.push(...w);
+    for (const x of w){ km += x.km; drop += x.drop; }
+    for (let i = 1; i < log.length; i++) if (log[i].soc - log[i-1].soc >= 5) charges++;
+  }
+  windows.sort((a,b) => a.t - b.t);
+  return { km, drop, charges, windows, cons: (drop >= 10 && km >= 5) ? drop/km : null };
+}
+// Consommation agrégée sur des trajets : les erreurs de palier se compensent quand on additionne
+function modeCons(list, mode){
+  const g = list.filter(t => t.summary.used != null && (!mode || t.summary.mode === mode));
+  const km = g.reduce((a,t) => a + t.summary.dist, 0), used = g.reduce((a,t) => a + t.summary.used, 0);
+  return { km, used, cons: (km >= 10 && used > 0) ? used/km : null };
+}
 
 function onOdo(odo){
   if (!connected()) return;
@@ -767,13 +834,14 @@ $('btnChangeBike').onclick = () => {
 
 // ================= Écran Rouler =================
 function bikeTrips(){ return tripsCache.filter(t => t.bikeId === currentBike); }
-// Consommation de référence : celle du niveau actuel si on a assez de trajets, sinon la moyenne
+// Consommation de référence pour l'autonomie : niveau actuel si assez de km, sinon journal de batterie
 function refCons(mode){
-  const ts = bikeTrips().filter(t => t.summary.cons != null && t.summary.dist >= MIN_CONS_KM);
-  const avg = list => { const km = list.reduce((a,t)=>a+t.summary.dist,0); return km > 0 ? list.reduce((a,t)=>a+t.summary.used,0)/km : null; };
-  const byMode = ts.filter(t => t.summary.mode === mode);
-  if (mode && byMode.length >= 2) return {cons: avg(byMode), label: `en ${mode}`};
-  if (ts.length) return {cons: avg(ts), label: 'tous niveaux confondus'};
+  const mc = mode ? modeCons(bikeTrips(), mode) : null;
+  if (mc && mc.cons && mc.km >= 15) return {cons: mc.cons, label: `en ${mode}`};
+  const J = currentBike ? journalStats([currentBike]) : null;
+  if (J && J.cons) return {cons: J.cons, label: 'mesurée sur tes derniers paliers de batterie'};
+  const all = modeCons(bikeTrips(), null);
+  if (all.cons) return {cons: all.cons, label: 'tous niveaux confondus'};
   return null;
 }
 function rangeKm(){
@@ -809,10 +877,10 @@ function updateLive(){
     $('ringArc').setAttribute('stroke', soc != null && soc <= 20 ? 'var(--warn)' : 'var(--accent)');
     const r = rangeKm();
     $('rRange').textContent = r ? '≈ ' + Math.round(r.km) + ' km' : '—';
-    $('rRangeNote').textContent = r ? `selon ta consommation ${r.rc.label} (${fr(r.rc.cons, 1)} %/km)` : 'Disponible après un ou deux trajets de plus de 2 km.';
+    $('rRangeNote').textContent = r ? `selon ta consommation ${r.rc.label} (${fr(r.rc.cons, 1)} %/km)` : 'Disponible après une dizaine de km : la batterie n’est mesurée que par paliers.';
     $('rGear').textContent = state.gear ?? '—';
     $('rLight').textContent = state.light ?? '—';
-    $('rTemp').textContent = state.mtemp != null ? state.mtemp + ' °C' : '—';
+    $('rLimit').textContent = state.limit ?? '—';
   }
   if (trip) updateCockpit();
 }
@@ -849,6 +917,8 @@ async function stopTrip(){
   finalize(t, Date.now(), num(state.soc), num(state.total));
   await dbPut(t);
   vibrate([60, 60, 60]);
+  try{ await fetchTemp(t); }catch(e){}
+  banner('gapBanner', '');
   log(`Trajet terminé : ${t.rows.length} mesures, ${t.points.length} points GPS`);
   await loadTrips();
   showScreen('ride');
@@ -909,7 +979,7 @@ function updateCockpit(){
   $('cRec').textContent = '● ' + fmtDur(s.dur);
   $('cDist').textContent = fr(s.dist);
   $('cAvg').textContent = s.dur > 30 ? fr(s.avg) : '—';
-  $('cTemp').textContent = state.mtemp ?? '—';
+  $('cMax').textContent = fr(trip.vmax);
   $('cSoc').textContent = soc ?? '—';
   if (!$('cBars').children.length) $('cBars').innerHTML = '<span></span>'.repeat(10);
   [...$('cBars').children].forEach((el, i) => el.classList.toggle('on', soc != null && i < Math.round(soc/10)));
@@ -1049,13 +1119,7 @@ async function syncBikes(){
   if (r.ok){ const j = await r.json(); sha = j.sha; try{ remote = JSON.parse(fromB64(j.content)); }catch(e){} }
   else if (r.status !== 404) throw new Error(ghError(r));
   const m = new Map(remote.map(b => [b.id, b]));
-  for (const b of bikes){
-    const o = m.get(b.id);
-    const w = (!o || (b.updatedAt||0) >= (o.updatedAt||0)) ? {...b} : {...o};
-    const odos = [b.lastOdo, o?.lastOdo].filter(x => x != null);
-    w.lastOdo = odos.length ? Math.max(...odos) : null;
-    m.set(b.id, w);
-  }
+  for (const b of bikes) m.set(b.id, mergeBike(b, m.get(b.id)));
   const byId = (a,b) => a.id < b.id ? -1 : 1;
   const merged = [...m.values()].sort(byId);
   const changed = JSON.stringify(merged) !== JSON.stringify([...remote].sort(byId));
@@ -1065,6 +1129,20 @@ async function syncBikes(){
       content: toB64(JSON.stringify(merged, null, 1)), ...(sha ? {sha} : {}) }});
     if (!p.ok) throw new Error(ghError(p));
   }
+}
+
+function mergeBike(a, b){
+  if (!b) return {...a};
+  const w = (a.updatedAt||0) >= (b.updatedAt||0) ? {...a} : {...b};
+  const odos = [a.lastOdo, b.lastOdo].filter(x => x != null);
+  w.lastOdo = odos.length ? Math.max(...odos) : null;
+  const log = new Map(); for (const e of [...(b.socLog||[]), ...(a.socLog||[])]) log.set(e.t, e);
+  w.socLog = [...log.values()].sort((x,y) => x.t - y.t).slice(-2000);
+  const del = new Set([...(a.chargesDeleted||[]), ...(b.chargesDeleted||[])]);
+  const ch = new Map(); for (const c of [...(b.charges||[]), ...(a.charges||[])]) ch.set(c.id, c);
+  w.charges = [...ch.values()].filter(c => !del.has(c.id)).sort((x,y) => x.t - y.t);
+  w.chargesDeleted = [...del];
+  return w;
 }
 
 let syncing = false;
@@ -1155,7 +1233,7 @@ function whenLabel(ts){
 function tripCard(t){
   const s = t.summary;
   const bits = [`${fr(s.dist)} km`, fmtHM(s.dur), `${fr(s.avg)} km/h`];
-  if (s.used != null) bits.push(`${s.used} %`);
+  if (s.used > 0) bits.push(`${s.used} %`);
   const bikeLine = (bikes.length > 1 || !t.bikeId) ? `<div class="st" style="margin-top:2px">${esc(bikeName(t.bikeId))}</div>` : '';
   const mode = s.mode ? `<span class="mode" style="background:${MODE_COLORS[s.mode]||'#9AA6B0'}">${esc(s.mode)}</span>` : '';
   return `<button class="trip" data-open="${t.id}">${miniMap(t)}
@@ -1173,13 +1251,12 @@ function renderHistory(){
   const trips = filtered();
   const now = new Date(), mStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   const mt = trips.filter(t => t.start >= mStart);
-  const ct = mt.filter(t => t.summary.cons != null && t.summary.dist >= MIN_CONS_KM);
-  const ckm = ct.reduce((a,t)=>a+t.summary.dist,0);
+  const mc = modeCons(mt, null);
   $('monthCard').innerHTML = trips.length ? `<div class="card grid3">
       <div class="muted xs" style="grid-column:1/-1;text-transform:uppercase;letter-spacing:.06em">${cap(now.toLocaleDateString('fr-FR',{month:'long',year:'numeric'}))}</div>
       <div><div class="big" style="font-size:24px">${fr(mt.reduce((a,t)=>a+t.summary.dist,0))}</div><div class="muted xs">km</div></div>
       <div><div class="big" style="font-size:24px">${mt.length}</div><div class="muted xs">trajet${mt.length>1?'s':''}</div></div>
-      <div><div class="big" style="font-size:24px">${ckm ? fr(ct.reduce((a,t)=>a+t.summary.used,0)/ckm) : '—'}</div><div class="muted xs">%/km en moy.</div></div></div>` : '';
+      <div><div class="big" style="font-size:24px">${mc.cons ? fr(mc.cons) : '—'}</div><div class="muted xs">%/km en moy.</div></div></div>` : '';
   if (!trips.length){ $('historyList').innerHTML = `<div class="empty">Aucun trajet pour l'instant.<br>Démarrez votre premier trajet depuis l'onglet Rouler.</div>`; return; }
   const thisMon = mondayOf(now).getTime(), groups = new Map();
   for (const t of trips){ const w = mondayOf(new Date(t.start)).getTime(); if (!groups.has(w)) groups.set(w, []); groups.get(w).push(t); }
@@ -1194,6 +1271,7 @@ $('hPills').onclick = e => { const b = e.target.closest('button'); if (!b) retur
 $('historyList').onclick = e => { const b = e.target.closest('[data-open]'); if (b) openDetail(Number(b.dataset.open)); };
 
 // ================= Fiche d'un trajet =================
+const cfgsKeys = ['speed','soc','ele'];
 let detailTrip = null, dmap = null, dLayer = null, dMarker = null, dRows = [], dPoints = [], dKey = 'speed';
 const SPEED_BANDS = [
   {max:10,  color:'#60A5FA', label:'< 10 km/h'},
@@ -1228,10 +1306,16 @@ $('dDel').onclick = async () => {
 };
 
 function tripDetails(t){
-  const rows = (t.rows || []).map(r => ({ t:Date.parse(r[0]), speed:num(r[1]), soc:num(r[2]), gear:r[5]||null,
+  const rows = (t.rows || []).map(r => ({ t:Date.parse(r[0]), speed:num(r[1]), soc:num(r[2]), odo:num(r[4]), gear:r[5]||null,
     temp:num(r[8]), ele:num(r[14]) })).filter(r => !isNaN(r.t));
-  let moving = 0; const modes = {};
+  let moving = 0; const modes = {}, gaps = [];
   for (let i = 1; i < rows.length; i++){
+    if (rows[i].t - rows[i-1].t > 20000){
+      gaps.push({from: rows[i-1].t, to: rows[i].t});
+      // le compteur a avancé pendant le trou : on y roulait, on compte ce temps comme du temps en mouvement
+      if (rows[i].odo != null && rows[i-1].odo != null && rows[i].odo - rows[i-1].odo >= 0.1) moving += (rows[i].t - rows[i-1].t) / 1000;
+      continue;
+    }
     const dt = Math.min(rows[i].t - rows[i-1].t, 10000) / 1000;
     if (rows[i].speed > 1){ moving += dt; if (rows[i].gear) modes[rows[i].gear] = (modes[rows[i].gear]||0) + dt; }
   }
@@ -1243,7 +1327,7 @@ function tripDetails(t){
   }
   const socs = rows.map(r => r.soc).filter(v => v != null);
   const temps = rows.map(r => r.temp).filter(v => v != null);
-  return { rows, moving, modes, gain: (t.points||[]).some(p => p.ele != null) ? gain : null,
+  return { rows, moving, modes, gaps, gain: (t.points||[]).some(p => p.ele != null) ? gain : null,
     socStart: t.socStart ?? socs[0] ?? null, socEnd: socs.length ? socs[socs.length-1] : null,
     tempMax: temps.length ? Math.max(...temps) : null };
 }
@@ -1252,7 +1336,9 @@ function metrics(t){
   let m = metricCache.get(t.id);
   if (m && m.src === t.summary) return m;
   const D = tripDetails(t);
-  m = { src:t.summary, moving: D.moving > 0 ? D.moving : t.summary.dur, gain: D.gain || 0, modes: D.modes };
+  let mv = D.moving > 60 ? D.moving : t.summary.dur;
+  if (t.summary.vmax && t.summary.dist / (mv/3600) > t.summary.vmax) mv = t.summary.dur;
+  m = { src:t.summary, moving: mv, gain: D.gain || 0, modes: D.modes };
   metricCache.set(t.id, m); return m;
 }
 
@@ -1262,7 +1348,8 @@ function renderDetail(t){
   $('dTitle').textContent = cap(d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'long'}));
   const hm = x => new Date(x).toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
   $('dSub').textContent = `${bikeName(t.bikeId)} · ${hm(t.start)} → ${hm(t.end || t.start)}`;
-  const moving = D.moving > 60 ? D.moving : s.dur;
+  let moving = D.moving > 60 ? D.moving : s.dur;
+  if (s.vmax && s.dist / (moving/3600) > s.vmax) moving = s.dur;
   const avg = moving > 0 ? s.dist / (moving/3600) : s.avg;
   $('dHero').innerHTML = [[fr(s.dist, 2),'km'],[fmtHM(Math.round(moving)),'en mouvement'],[fr(avg),'km/h moy.']]
     .map(([v,l]) => `<div><div class="big" style="font-size:28px">${v}</div><div class="muted xs" style="margin-top:4px">${l}</div></div>`).join('');
@@ -1270,11 +1357,12 @@ function renderDetail(t){
   $('dTiles').innerHTML =
       tile('Vitesse max', fr(s.vmax), 'km/h')
     + tile('Batterie', (D.socStart != null && D.socEnd != null) ? `${D.socStart} → ${D.socEnd}` : '—', '%')
-    + tile('Consommation', s.cons != null ? fr(s.cons, 2) : '—', '%/km')
+    + tile('Consommation', s.used > 0 && s.cons != null ? fr(s.cons, 2) : '—', s.used > 0 ? '%/km' : '')
     + tile('Dénivelé +', D.gain != null ? Math.round(D.gain) : '—', 'm')
     + tile('Durée totale', fmtHM(s.dur))
-    + tile('Moteur max', D.tempMax ?? '—', '°C')
-    + (s.cons != null && s.dist < MIN_CONS_KM ? `<div class="muted xs" style="grid-column:1/-1">Trajet court : la batterie n'étant mesurée qu'au pourcent près, la consommation est peu fiable.</div>` : '');
+    + tile('Temp. extérieure', t.weather?.temp != null ? fr(t.weather.temp, 0) : '—', t.weather?.temp != null ? '°C' : '')
+    + (s.used != null && s.used <= 0 ? `<div class="muted xs" style="grid-column:1/-1">La batterie du vélo n'est indiquée que par paliers et n'en a pas changé pendant ce trajet : la consommation se mesure sur plusieurs trajets (onglet Stats).</div>`
+       : s.used > 0 && s.dist < 10 ? `<div class="muted xs" style="grid-column:1/-1">Trajet court : la batterie n'étant indiquée que par paliers, cette consommation est approximative.</div>` : '');
   const total = Object.values(D.modes).reduce((a,b)=>a+b,0);
   $('dModesBox').style.display = total > 0 ? 'flex' : 'none';
   const order = ['Éco','Sport','Turbo','Arrêt'];
@@ -1282,10 +1370,19 @@ function renderDetail(t){
   $('dModes').innerHTML = entries.map(([m,sec]) => { const pct = 100*sec/total;
     return `<div style="width:${pct}%;background:${MODE_COLORS[m]||'#9AA6B0'}">${pct >= 14 ? esc(m) : ''}</div>`; }).join('');
   $('dModesTxt').textContent = entries.map(([m,sec]) => `${m} ${Math.round(sec/60)} min`).join(' · ');
+  const gapSec = Math.round(D.gaps.reduce((a,g) => a + (g.to - g.from), 0) / 1000);
+  $('dGaps').innerHTML = gapSec ? `<div class="banner info" style="font-size:13px"><span>⚠ ${fmtGap(gapSec)} non enregistrées (app en arrière-plan ou connexion perdue)${D.gaps.length > 1 ? `, en ${D.gaps.length} fois` : ''}. La distance reste juste : elle vient du compteur du vélo.</span></div>` : '';
   renderDetailMap(t);
-  dRows = D.rows.filter((_, i) => i % Math.max(1, Math.ceil(D.rows.length/1500)) === 0);
-  const avail = [['speed','Vitesse'],['soc','Batterie'],['ele','Altitude'],['temp','Moteur']].filter(([k]) => dRows.some(r => r[k] != null));
+  const step = Math.max(1, Math.ceil(D.rows.length/1500));
+  const sampled = D.rows.filter((_, i) => i % step === 0);
+  dRows = [];
+  sampled.forEach((r, i) => {          // un point vide coupe la courbe là où il manque des mesures
+    if (i && r.t - sampled[i-1].t > 20000 * step) dRows.push({t: (r.t + sampled[i-1].t)/2, speed:null, soc:null, ele:null, gap:true});
+    dRows.push(r);
+  });
+  const avail = [['speed','Vitesse'],['soc','Batterie'],['ele','Altitude']].filter(([k]) => dRows.some(r => r[k] != null));
   if (!avail.some(([k]) => k === dKey)) dKey = avail[0]?.[0] || 'speed';
+  if (!cfgsKeys.includes(dKey)) dKey = 'speed';
   $('dTabs').innerHTML = avail.map(([k,l]) => `<button data-k="${k}" class="${k===dKey?'on':''}">${l}</button>`).join('');
   $('dHint').style.display = dPoints.length ? 'block' : 'none';
   drawDetailChart();
@@ -1309,13 +1406,20 @@ function renderDetailMap(t){
   if (!dPoints.length){ dmap.setView([45.76, 4.84], 12); return; }
   let run = [], runBand = null;
   const flush = () => { if (run.length > 1) L.polyline(run, {color:runBand.color, weight:6, opacity:.95}).addTo(dLayer); };
+  let hasGap = false;
   for (let i = 1; i < dPoints.length; i++){
     const a = dPoints[i-1], b = dPoints[i], dt = (b.t - a.t) / 1000;
+    if (dt > 30){   // pas de position pendant plus de 30 s : tronçon non enregistré
+      flush(); run = []; runBand = null; hasGap = true;
+      L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {color:'#9AA6B0', weight:4, dashArray:'2 9', lineCap:'round'}).addTo(dLayer);
+      continue;
+    }
     const bd = band(Math.min(dt > 0 ? haversine(a, b) / dt * 3.6 : 0, 80));
-    if (bd !== runBand){ flush(); run = [[a.lat, a.lon]]; runBand = bd; }
+    if (bd !== runBand || !run.length){ flush(); run = [[a.lat, a.lon]]; runBand = bd; }
     run.push([b.lat, b.lon]);
   }
   flush();
+  if (hasGap) $('dLegend').insertAdjacentHTML('beforeend', '<span><i style="background:repeating-linear-gradient(90deg,#9AA6B0 0 3px,transparent 3px 7px)"></i>non enregistré</span>');
   const first = dPoints[0], last = dPoints[dPoints.length-1];
   L.circleMarker([first.lat, first.lon], {radius:8, color:'#0B0E10', weight:3, fillColor:'#22C55E', fillOpacity:1}).bindTooltip('Départ').addTo(dLayer);
   L.circleMarker([last.lat, last.lon], {radius:8, color:'#0B0E10', weight:3, fillColor:'#EF4444', fillOpacity:1}).bindTooltip('Arrivée').addTo(dLayer);
@@ -1336,7 +1440,7 @@ function highlight(i){
 }
 let dChart = null;
 function drawDetailChart(){
-  const cfgs = { speed:['Vitesse','km/h','#2DD4BF',1,true], soc:['Batterie','%','#60A5FA',0,false], ele:['Altitude','m','#A78BFA',0,true], temp:['Température du moteur','°C','#F87171',0,false] };
+  const cfgs = { speed:['Vitesse','km/h','#2DD4BF',1,true], soc:['Batterie','%','#60A5FA',0,false], ele:['Altitude','m','#A78BFA',0,true] };
   const [title, unit, color, digits, fill] = cfgs[dKey];
   $('dChartTitle').textContent = title;
   if (!window.Chart || !detailTrip) return;
@@ -1348,7 +1452,7 @@ function drawDetailChart(){
   dChart = new Chart($('dChart'), {
     type:'line',
     data:{ labels, datasets:[{ data: dRows.map(r => r[dKey]), borderColor:color, backgroundColor:color+'2E', fill, borderWidth:2,
-      pointRadius:0, pointHoverRadius:4, tension:.2, spanGaps:true }]},
+      pointRadius:0, pointHoverRadius:4, tension:.2, spanGaps:false }]},
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{mode:'index', intersect:false},
       onHover:(e, els) => { if (els.length) highlight(els[0].index); },
@@ -1373,12 +1477,11 @@ function periodRange(p, off, now=new Date()){
 function aggregate(list){
   const km = list.reduce((a,t)=>a+t.summary.dist,0);
   const moving = list.reduce((a,t)=>a+metrics(t).moving,0);
-  const used = list.reduce((a,t)=>a+(t.summary.used>0 ? t.summary.used : 0),0);
-  const ct = list.filter(t => t.summary.cons != null && t.summary.dist >= MIN_CONS_KM);
-  const ckm = ct.reduce((a,t)=>a+t.summary.dist,0);
+  const mc = modeCons(list, null);
+  const used = Math.max(0, mc.used);
   return { km, n:list.length, moving, avg: moving > 0 ? km/(moving/3600) : null,
     vmax: Math.max(0, ...list.map(t=>t.summary.vmax||0)), gain: list.reduce((a,t)=>a+metrics(t).gain,0),
-    used, cons: ckm > 0 ? ct.reduce((a,t)=>a+t.summary.used,0)/ckm : null };
+    used, cons: mc.cons };
 }
 const pct = (a, b) => b > 0 ? Math.round(100*(a-b)/b) : null;
 
@@ -1484,15 +1587,14 @@ function renderStats(){
   const order = ['Éco','Sport','Turbo','Arrêt'];
   $('sModeShare').innerHTML = stot ? Object.entries(share).sort((a,b)=>order.indexOf(a[0])-order.indexOf(b[0])).map(([m,s]) => { const p = Math.round(100*s/stot);
     return `<div style="width:${100*s/stot}%;background:${MODE_COLORS[m]||'#9AA6B0'}">${p >= 12 ? `${esc(m)} ${p} %` : ''}</div>`; }).join('') : '<div style="width:100%;background:var(--s2);color:var(--muted);font-weight:500">Pas encore de données</div>';
-  const consT = inR.filter(t => t.summary.cons != null && t.summary.dist >= MIN_CONS_KM);
-  const byMode = ['Éco','Sport','Turbo'].map(m => { const g = consT.filter(t => t.summary.mode === m); const km = g.reduce((a,t)=>a+t.summary.dist,0);
-    const c = km > 0 ? g.reduce((a,t)=>a+t.summary.used,0)/km : null; return {m, c, range: c ? 100/c : null}; });
+  const byMode = ['Éco','Sport','Turbo'].map(m => { const mc = modeCons(inR, m); return {m, c: mc.cons, km: mc.km, range: mc.cons ? 100/mc.cons : null}; });
   const cmax = Math.max(0.01, ...byMode.map(x => x.c || 0));
   $('sModeRows').innerHTML = byMode.map(x => `<div class="mrow"><span>${x.m}</span><div class="bar"><i style="width:${x.c ? (100*x.c/cmax).toFixed(0) : 0}%;background:${MODE_COLORS[x.m]}"></i></div>
-    <span style="text-align:right">${x.c ? fr(x.c) + ' %/km' : '—'}</span><b style="text-align:right">${x.range ? Math.round(x.range) + ' km' : '—'}</b></div>`).join('');
-  const eco = byMode[0].range, turbo = byMode[2].range;
-  $('sModeTxt').textContent = 'Autonomie estimée pour une charge complète.' + (eco && turbo ? ` En Éco, tu gagnes environ ${Math.round(eco - turbo)} km par rapport au Turbo.` : ' Il faut des trajets de plus de 2 km à chaque niveau pour comparer.');
-  const series = [...consT].sort((a,b)=>a.start-b.start).slice(-40).map(t => t.summary.cons);
+    <span style="text-align:right">${x.c ? fr(x.c) + ' %/km' : x.km ? `<span class="muted xs">${fr(x.km)} km</span>` : '—'}</span><b style="text-align:right">${x.range ? Math.round(x.range) + ' km' : '—'}</b></div>`).join('');
+  const ecoR = byMode[0].range, turbo = byMode[2].range;
+  $('sModeTxt').textContent = 'Autonomie estimée pour une charge complète.' + (ecoR && turbo ? ` En Éco, tu gagnes environ ${Math.round(ecoR - turbo)} km par rapport au Turbo.` : ' Il faut environ 10 km cumulés à un niveau pour estimer sa consommation (la batterie n’est mesurée que par paliers).');
+  const fv = getFilter(), jIds = fv === 'none' ? [] : fv ? [fv] : bikes.map(b => b.id);
+  const series = journalStats(jIds).windows.slice(-40).map(w => w.cons);
   if (series.length >= 2){
     const lo = Math.min(...series), hi = Math.max(...series), span = (hi - lo) || 1;
     const pts = series.map((c, i) => `${(330*i/(series.length-1)).toFixed(1)},${(62 - 54*(c-lo)/span).toFixed(1)}`).join(' ');
@@ -1500,7 +1602,7 @@ function renderStats(){
     const h = Math.floor(series.length/2), a1 = series.slice(0,h), a2 = series.slice(h);
     const m1 = a1.reduce((a,b)=>a+b,0)/a1.length, m2 = a2.reduce((a,b)=>a+b,0)/a2.length, p = pct(m2, m1);
     $('consTxt').textContent = `De ${fr(lo)} à ${fr(hi)} %/km. ` + (p == null || Math.abs(p) < 5 ? 'Consommation stable sur la période.' : p > 0 ? `+${p} % sur les derniers trajets (le froid réduit le rendement de la batterie).` : `${p} % sur les derniers trajets.`);
-  } else { $('consSvg').innerHTML = ''; $('consTxt').textContent = 'Il faut au moins deux trajets de plus de 2 km.'; }
+  } else { $('consSvg').innerHTML = ''; $('consTxt').textContent = 'Se remplit au fil des paliers de batterie : un point chaque fois que le niveau baisse de 10 %.'; }
 
   // ---- Énergie
   const kwh = A.used/100 * BATTERY_WH / 1000;
@@ -1511,16 +1613,79 @@ function renderStats(){
   const pick = (list, f, better) => list.reduce((b, t) => (f(t) != null && (b == null || better(f(t), f(b)))) ? t : b, null);
   const day = t => cap(new Date(t.start).toLocaleDateString('fr-FR',{weekday:'long', day:'numeric', month:'long'}));
   const long = inR.filter(t => t.summary.dist >= MIN_CONS_KM);
+  const eco = inR.filter(t => t.summary.dist >= 10 && t.summary.used > 0);
   const recs = [
     ['Plus long trajet', pick(inR, t=>t.summary.dist, (a,b)=>a>b), t => fr(t.summary.dist) + ' km'],
     ['Vitesse max', pick(inR, t=>t.summary.vmax, (a,b)=>a>b), t => fr(t.summary.vmax) + ' km/h'],
     ['Meilleure moyenne', pick(long, t=>t.summary.dist/(metrics(t).moving/3600||1), (a,b)=>a>b), t => fr(t.summary.dist/(metrics(t).moving/3600)) + ' km/h'],
     ['Plus gros dénivelé', pick(inR, t=>metrics(t).gain||null, (a,b)=>a>b), t => Math.round(metrics(t).gain) + ' m'],
-    ['Plus économe', pick(long, t=>t.summary.cons, (a,b)=>a<b), t => fr(t.summary.cons, 2) + ' %/km'],
+    ['Plus économe', pick(eco, t=>t.summary.cons, (a,b)=>a<b), t => fr(t.summary.cons, 2) + ' %/km'],
   ].filter(r => r[1]);
   $('records').innerHTML = recs.length ? recs.map(([l, t, f]) => `<button class="rec" data-open="${t.id}"><span><span class="muted sm">${l}</span><br><span class="xs" style="color:var(--dim);filter:brightness(1.6)">${day(t)}</span></span><span class="v">${f(t)}</span></button>`).join('')
     : '<div class="muted sm" style="padding:6px 0 12px">Les records apparaîtront après vos premiers trajets.</div>';
+  renderHealth();
 }
+let chargeFormFor = null;
+const WALL_EFFICIENCY = 0.88;    // pertes du chargeur (~12 %)
+function chargeCapacity(c){ return c.wh * WALL_EFFICIENCY / ((100 - c.socStart) / 100); }
+function renderHealth(){
+  const f = getFilter();
+  const ids = f === 'none' ? [] : f ? [f] : bikes.map(b => b.id);
+  $('healthCard').style.display = ids.length ? 'flex' : 'none';
+  $('health').innerHTML = ids.map(id => {
+    const b = bikeById(id); if (!b) return '';
+    const J = journalStats([id]), mc = modeCons(tripsCache.filter(t => t.bikeId === id), null);
+    const cons = J.cons || mc.cons;
+    const cycles = cons && b.lastOdo ? b.lastOdo * cons / 100 : null;
+    const charges = b.charges || [], last = charges[charges.length - 1];
+    const big = (v, l) => `<div><div class="big" style="font-size:22px">${v}</div><div class="muted xs">${l}</div></div>`;
+    let soh = '';
+    if (last){
+      const cap = chargeCapacity(last), first = charges[0];
+      const evo = charges.length > 1 ? Math.round(100 * (cap - chargeCapacity(first)) / chargeCapacity(first)) : null;
+      soh = `<div class="row" style="gap:14px"><div class="big" style="font-size:34px;color:${cap/BATTERY_WH >= 0.8 ? 'var(--okt)' : '#FCD34D'}">${Math.min(100, Math.round(100*cap/BATTERY_WH))} %</div>
+        <div class="muted xs">État de santé mesuré : capacité ≈ ${Math.round(cap)} Wh sur ${Math.round(BATTERY_WH)} Wh d'origine${evo != null ? ` · ${evo >= 0 ? '+' : ''}${evo} % depuis la première mesure` : ''}.</div></div>`
+        + charges.slice().reverse().map(c => `<div class="chrow"><span>${new Date(c.t).toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'})} · départ ${c.socStart} % · ${c.wh} Wh → <b>${Math.round(chargeCapacity(c))} Wh</b></span>
+          <button class="link" data-delcharge="${esc(id)}|${esc(c.id)}" style="min-height:36px;padding:4px">Supprimer</button></div>`).join('');
+    } else {
+      soh = `<div class="muted xs" style="line-height:1.5">Pour mesurer la santé réelle de la batterie : branche le chargeur sur une <b style="color:var(--ink)">prise wattmètre</b>, recharge une batterie presque vide jusqu'au bout, et note les Wh affichés. Connecte-toi au vélo juste avant de brancher pour lire le niveau de départ.</div>`;
+    }
+    const form = chargeFormFor === id ? `<div class="picker" style="display:block">
+        <label for="chSoc" style="margin-top:0">Niveau de batterie au branchement (%)</label><input id="chSoc" type="number" min="0" max="95" inputmode="numeric" placeholder="ex. 10">
+        <label for="chWh">Énergie affichée par le wattmètre à la fin (Wh)</label><input id="chWh" type="number" min="1" inputmode="numeric" placeholder="ex. 560">
+        <div class="row" style="margin-top:12px"><button class="btn primary" data-savecharge="${esc(id)}">Enregistrer</button><button class="btn" data-cancelcharge="1">Annuler</button></div></div>`
+      : `<button class="btn" data-addcharge="${esc(id)}">Ajouter une mesure de recharge</button>`;
+    return `<div style="display:flex;flex-direction:column;gap:12px">
+      ${ids.length > 1 ? `<b>${esc(b.name)}</b>` : ''}
+      <div class="grid3">${big(cycles != null ? '≈ ' + fr(cycles, cycles < 10 ? 1 : 0) : '—', 'cycles équivalents')}${big(J.charges, 'recharge' + (J.charges > 1 ? 's' : '') + ' détectée' + (J.charges > 1 ? 's' : ''))}${big(cons ? '≈ ' + Math.round(100/cons) + ' km' : '—', 'par charge complète')}</div>
+      ${cycles != null ? `<div class="hbar"><i style="width:${Math.min(100, 100*cycles/500).toFixed(1)}%"></i></div>` : ''}
+      <div class="muted xs" style="line-height:1.5">${cycles != null ? `Cycles estimés à partir du compteur (${fr(b.lastOdo)} km) et de ta consommation. ` : 'Les cycles s’estiment dès que ta consommation est connue (une dizaine de km). '}Repère : une batterie lithium de ce type perd en général environ 20 % de capacité après 500 à 800 cycles complets.</div>
+      <div style="border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:10px">${soh}${form}</div>
+    </div>`;
+  }).join('<div style="border-top:1px solid var(--line)"></div>');
+}
+$('health').onclick = e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  if (btn.dataset.addcharge){ chargeFormFor = btn.dataset.addcharge; renderHealth(); setTimeout(() => $('chSoc')?.focus(), 30); }
+  if (btn.dataset.cancelcharge){ chargeFormFor = null; renderHealth(); }
+  if (btn.dataset.savecharge){
+    const b = bikeById(btn.dataset.savecharge); if (!b) return;
+    const socStart = num($('chSoc').value), wh = num($('chWh').value);
+    if (socStart == null || socStart < 0 || socStart > 95){ alert('Indique le niveau de batterie au branchement, entre 0 et 95 %.'); return; }
+    if (!wh || wh <= 0){ alert('Indique les Wh affichés par le wattmètre.'); return; }
+    if (socStart > 50 && !confirm('La mesure est plus fiable en partant d’une batterie presque vide. L’enregistrer quand même ?')) return;
+    b.charges = [...(b.charges || []), {id: 'c' + Date.now().toString(36), t: Date.now(), socStart, wh}];
+    b.updatedAt = Date.now(); chargeFormFor = null; storeBikes(); renderHealth(); syncAll();
+  }
+  if (btn.dataset.delcharge){
+    const [bid, cid] = btn.dataset.delcharge.split('|'); const b = bikeById(bid); if (!b) return;
+    if (!confirm('Supprimer cette mesure ?')) return;
+    b.charges = (b.charges || []).filter(c => c.id !== cid);
+    b.chargesDeleted = [...(b.chargesDeleted || []), cid];
+    b.updatedAt = Date.now(); storeBikes(); renderHealth(); syncAll();
+  }
+};
+
 $('records').onclick = e => { const b = e.target.closest('[data-open]'); if (b) openDetail(Number(b.dataset.open)); };
 
 // ================= Réglages =================
@@ -1536,6 +1701,32 @@ function renderSettings(){
 }
 $('bikeList').onclick = e => { const b = e.target.closest('button[data-rename]'); if (b) renameBike(b.dataset.rename); };
 $('goal').onchange = () => { const v = num($('goal').value); lsSet('fiido_goal', v && v > 0 ? v : ''); };
+
+// ================= Température extérieure (Open-Meteo, gratuit, sans clé) =================
+async function fetchTemp(t){
+  const p = t.points?.[0]; if (!p || !navigator.onLine) return false;
+  const mid = new Date((t.start + (t.end || t.start)) / 2);
+  if (Date.now() - mid > 88 * 864e5) return false;     // au-delà, le service ne garde pas l'historique horaire
+  const day = mid.toISOString().slice(0, 10);
+  const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${p.lat.toFixed(2)}&longitude=${p.lon.toFixed(2)}&hourly=temperature_2m&timezone=UTC&start_date=${day}&end_date=${day}`);
+  if (!r.ok) return false;
+  const j = await r.json(), i = (j.hourly?.time || []).indexOf(mid.toISOString().slice(0, 13) + ':00');
+  const temp = i >= 0 ? j.hourly.temperature_2m[i] : null;
+  if (temp == null) return false;
+  t.weather = {temp, src: 'open-meteo'}; t.synced = false;
+  await dbPut(t);
+  return true;
+}
+async function backfillWeather(){
+  if (!navigator.onLine || trip) return;
+  let n = 0;
+  for (const t of tripsCache){
+    if (n >= 15) break;
+    if (t.weather || !t.points?.length) continue;
+    try{ if (await fetchTemp(t)) n++; }catch(e){ break; }
+  }
+  if (n){ await loadTrips(); if (configured()) syncAll(); else invalidateTrips(); }
+}
 
 // ================= Exports =================
 function stamp(t){
@@ -1597,7 +1788,8 @@ ${pts}
   renderSyncChip();
   const hm = location.hash.match(/^#trajet-(\d+)$/);
   if (hm) openDetail(Number(hm[1]), false); else showScreen('ride');
-  syncAll();
+  await syncAll();
+  backfillWeather();
 })();
 </script>
 </body>

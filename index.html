@@ -429,7 +429,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.9.1 bêta';
+const APP_VERSION = '0.9.2 bêta';
 const APP_DATE = '7 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -738,11 +738,27 @@ function logSoc(){
   if (b.socLog.length > 2000) b.socLog.splice(0, b.socLog.length - 2000);
   lsSet('fiido_bikes', bikes);
 }
-// Fenêtres de décharge : on cumule les baisses jusqu'à 10 % ; une hausse (recharge) coupe la fenêtre
+// Une recharge : hausse d'au moins 20 %, ou hausse jusqu'à 95-100 %.
+// Les petites hausses sont des remontées de tension au repos, pas des recharges.
+const isCharge = (a, b) => b.soc - a.soc >= 20 || (b.soc >= 95 && b.soc - a.soc >= 10);
+function chargeEvents(log){
+  const out = []; let lastCharge = null;
+  (log || []).forEach((e, i) => {
+    if (!i || !isCharge(log[i-1], e)) return;
+    const prev = log[i-1];
+    // ce qu'a donné la charge précédente : km parcourus et % utilisés jusqu'à cette recharge
+    const since = lastCharge ? {km: prev.odo - lastCharge.odo, used: lastCharge.to - prev.soc} : null;
+    const ev = {t: e.t, from: prev.soc, to: e.soc, added: e.soc - prev.soc, odo: e.odo, since};
+    out.push(ev); lastCharge = ev;
+  });
+  return out;
+}
+// Fenêtres de décharge : on cumule les baisses jusqu'à 10 % ; une recharge coupe la fenêtre
 function journalWindows(log, minDrop=10){
   const out = []; let start = null, prev = null;
   for (const e of log || []){
-    if (!prev || e.soc > prev.soc){ start = e; prev = e; continue; }
+    if (!prev || isCharge(prev, e)){ start = e; prev = e; continue; }
+    if (e.soc > prev.soc){ prev = e; continue; }          // remontée de tension : on l'ignore
     prev = e;
     const drop = start.soc - e.soc, km = e.odo - start.odo;
     if (drop >= minDrop && km > 0.5){ out.push({t: e.t, km, drop, cons: drop/km}); start = e; }
@@ -750,15 +766,16 @@ function journalWindows(log, minDrop=10){
   return out;
 }
 function journalStats(ids){
-  let km = 0, drop = 0, charges = 0; const windows = [];
+  let km = 0, drop = 0; const windows = [], events = [];
   for (const id of ids){
     const log = bikeById(id)?.socLog || [];
     const w = journalWindows(log); windows.push(...w);
     for (const x of w){ km += x.km; drop += x.drop; }
-    for (let i = 1; i < log.length; i++) if (log[i].soc - log[i-1].soc >= 5) charges++;
+    events.push(...chargeEvents(log).map(e => ({...e, bikeId: id})));
   }
-  windows.sort((a,b) => a.t - b.t);
-  return { km, drop, charges, windows, cons: (drop >= 10 && km >= 5) ? drop/km : null };
+  windows.sort((a,b) => a.t - b.t); events.sort((a,b) => a.t - b.t);
+  return { km, drop, charges: events.length, events, added: events.reduce((a,e) => a + e.added, 0),
+           windows, cons: (drop >= 10 && km >= 5) ? drop/km : null };
 }
 // Consommation agrégée sur des trajets : les erreurs de palier se compensent quand on additionne
 function modeCons(list, mode){
@@ -1639,6 +1656,13 @@ function renderHealth(){
     const cycles = cons && b.lastOdo ? b.lastOdo * cons / 100 : null;
     const charges = b.charges || [], last = charges[charges.length - 1];
     const big = (v, l) => `<div><div class="big" style="font-size:22px">${v}</div><div class="muted xs">${l}</div></div>`;
+    const evs = J.events.slice().reverse();
+    const recharges = `<div style="display:flex;flex-direction:column;gap:6px">
+        <div class="row between"><b class="sm">Recharges</b><span class="muted xs">${J.charges ? `+${J.added} % au total · ≈ ${fr(J.added/100 * BATTERY_WH / 1000, 1)} kWh` : ''}</span></div>
+        ${evs.length ? evs.slice(0, 8).map(e => `<div class="chrow" style="align-items:flex-start"><span>${cap(new Date(e.t).toLocaleDateString('fr-FR',{weekday:'short', day:'numeric', month:'short'}))}<br><span class="muted xs">${e.since && e.since.km > 0.5 ? `charge précédente : ${fr(e.since.km)} km pour ${e.since.used} %${e.since.used >= 20 ? ` (≈ ${Math.round(100 * e.since.km / e.since.used)} km par charge complète)` : ''}` : 'constatée à la connexion suivante'}</span></span>
+            <span style="text-align:right;white-space:nowrap"><b>${e.from} → ${e.to} %</b><br><span class="muted xs">+${e.added} % · ≈ ${Math.round(e.added/100 * BATTERY_WH)} Wh</span></span></div>`).join('')
+          : `<div class="muted xs" style="line-height:1.5">Aucune recharge détectée pour l'instant. Après une recharge, connecte-toi simplement au vélo : l'app verra le niveau remonter et notera la recharge (par exemple 30 → 100 %).</div>`}
+      </div>`;
     let soh = '';
     if (last){
       const cap = chargeCapacity(last), first = charges[0];
@@ -1648,7 +1672,7 @@ function renderHealth(){
         + charges.slice().reverse().map(c => `<div class="chrow"><span>${new Date(c.t).toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'})} · départ ${c.socStart} % · ${c.wh} Wh → <b>${Math.round(chargeCapacity(c))} Wh</b></span>
           <button class="link" data-delcharge="${esc(id)}|${esc(c.id)}" style="min-height:36px;padding:4px">Supprimer</button></div>`).join('');
     } else {
-      soh = `<div class="muted xs" style="line-height:1.5">Pour mesurer la santé réelle de la batterie : branche le chargeur sur une <b style="color:var(--ink)">prise wattmètre</b>, recharge une batterie presque vide jusqu'au bout, et note les Wh affichés. Connecte-toi au vélo juste avant de brancher pour lire le niveau de départ.</div>`;
+      soh = `<div class="muted xs" style="line-height:1.5">Avec une <b style="color:var(--ink)">prise wattmètre</b> (une quinzaine d'euros), tu peux mesurer l'état de santé réel : recharge une batterie presque vide jusqu'au bout et note les Wh affichés. Connecte-toi au vélo juste avant de brancher pour lire le niveau de départ.</div>`;
     }
     const form = chargeFormFor === id ? `<div class="picker" style="display:block">
         <label for="chSoc" style="margin-top:0">Niveau de batterie au branchement (%)</label><input id="chSoc" type="number" min="0" max="95" inputmode="numeric" placeholder="ex. 10">
@@ -1660,7 +1684,11 @@ function renderHealth(){
       <div class="grid3">${big(cycles != null ? '≈ ' + fr(cycles, cycles < 10 ? 1 : 0) : '—', 'cycles équivalents')}${big(J.charges, 'recharge' + (J.charges > 1 ? 's' : '') + ' détectée' + (J.charges > 1 ? 's' : ''))}${big(cons ? '≈ ' + Math.round(100/cons) + ' km' : '—', 'par charge complète')}</div>
       ${cycles != null ? `<div class="hbar"><i style="width:${Math.min(100, 100*cycles/500).toFixed(1)}%"></i></div>` : ''}
       <div class="muted xs" style="line-height:1.5">${cycles != null ? `Cycles estimés à partir du compteur (${fr(b.lastOdo)} km) et de ta consommation. ` : 'Les cycles s’estiment dès que ta consommation est connue (une dizaine de km). '}Repère : une batterie lithium de ce type perd en général environ 20 % de capacité après 500 à 800 cycles complets.</div>
-      <div style="border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:10px">${soh}${form}</div>
+      <div style="border-top:1px solid var(--line);padding-top:12px">${recharges}</div>
+      <details style="border-top:1px solid var(--line);padding-top:10px" ${last || chargeFormFor === id ? 'open' : ''}>
+        <summary class="sm" style="cursor:pointer;min-height:36px;display:flex;align-items:center"><b>État de santé mesuré</b>${last ? '' : '<span class="muted xs" style="margin-left:6px">(avec une prise wattmètre)</span>'}</summary>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">${soh}${form}</div>
+      </details>
     </div>`;
   }).join('<div style="border-top:1px solid var(--line)"></div>');
 }

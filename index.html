@@ -165,6 +165,28 @@ body.cockpit .tabbar{display:none}
 .bikerow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .bikerow:first-child{border-top:none}
 .diag{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:10px}
+/* ---------- Guidage ---------- */
+.favs{display:flex;gap:8px;flex-wrap:wrap}
+.fav{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:var(--s2);color:var(--ink);font-size:14px}
+.sheet{position:fixed;inset:0;z-index:3000;background:var(--bg);overflow:auto;display:none}
+.sheet.on{display:block}
+.sheetin{max-width:560px;margin:0 auto;padding:18px 16px calc(24px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px}
+.res{display:flex;gap:12px;align-items:center;width:100%;text-align:left;background:var(--s1);border:1px solid var(--line);border-radius:14px;padding:10px 12px;color:var(--ink);min-height:56px;margin-bottom:8px}
+.res .t{font-weight:600}.res .s{font-size:12px;color:var(--muted)}
+.pmap{position:relative;height:240px;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#12171A}
+#pMap{position:absolute;inset:0}
+#navPreview:not([hidden]){display:flex;flex-direction:column;gap:12px}
+.navbar{display:none;align-items:center;gap:12px;background:#0F2421;border:1px solid var(--accent);border-radius:16px;padding:10px 12px}
+.navbar.on{display:flex}
+.navico{width:56px;height:56px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--accent)}
+.navdist{font-family:var(--num);font-size:32px;font-weight:700;line-height:1;white-space:nowrap}
+.navtxt{font-size:15px;margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.navsub{display:none;font-size:13px;color:var(--muted);text-align:center;margin-top:-6px}
+.navsub.on{display:block}
+#scr-cockpit.nav .speed .n{font-size:clamp(72px,22vw,100px)}
+#scr-cockpit.nav .ctiles{display:none}
+.cmap .navbtn{right:auto;left:10px}
+.cmap .navbtn.active{border-color:var(--accent);color:var(--accent)}
 footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 </style>
 </head>
@@ -223,6 +245,13 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     </button>
     <div class="muted xs" style="text-align:center;margin-top:-6px" id="startHint">Connectez d'abord le vélo.</div>
 
+    <div class="card" style="display:flex;flex-direction:column;gap:10px">
+      <div class="row between"><h3>Itinéraire</h3><span class="muted xs" id="navCardSub"></span></div>
+      <div class="favs" id="favRow"></div>
+      <button class="btn wide" id="btnNavOpen" style="display:flex;align-items:center;justify-content:center;gap:8px">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>Choisir une destination</button>
+    </div>
+
     <div id="lastTripBox"></div>
   </section>
 
@@ -238,6 +267,12 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
         </button>
       </div>
     </div>
+    <div class="navbar" id="navBar" aria-live="polite">
+      <div class="navico" id="navIco"></div>
+      <div style="flex:1;min-width:0"><div class="navdist" id="navDist">—</div><div class="navtxt" id="navTxt"></div></div>
+      <button class="iconbtn" id="navStop" aria-label="Arrêter le guidage"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+    </div>
+    <div class="navsub" id="navSub"></div>
     <div class="speed"><div class="n" id="cSpeed">0,0</div><div class="u">KM/H</div></div>
     <div class="seg" id="cGears"><div data-g="Éco">Éco</div><div data-g="Sport">Sport</div><div data-g="Turbo">Turbo</div></div>
     <div class="card" style="display:flex;flex-direction:column;gap:10px">
@@ -247,13 +282,16 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
         <div class="bars10" id="cBars"></div>
       </div>
     </div>
-    <div class="grid3">
+    <div class="grid3 ctiles">
       <div class="tile"><div class="k">Distance</div><div class="v"><span id="cDist">0,0</span><span class="u">km</span></div></div>
       <div class="tile"><div class="k">Moyenne</div><div class="v"><span id="cAvg">—</span><span class="u">km/h</span></div></div>
       <div class="tile"><div class="k">Max</div><div class="v"><span id="cMax">—</span><span class="u">km/h</span></div></div>
     </div>
     <div class="cmap dark-tiles">
       <div id="map"></div>
+      <button class="iconbtn navbtn" id="btnNavCockpit" aria-label="Choisir une destination">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-8-8 18-2-8z"></path></svg>
+      </button>
       <button class="iconbtn" id="btnFollow" aria-label="Recentrer la carte sur ma position">
         <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path></svg>
       </button>
@@ -399,6 +437,15 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
       </details>
     </div>
 
+    <h2>Guidage</h2>
+    <div class="card" style="display:flex;flex-direction:column;gap:6px">
+      <b class="sm">Lieux favoris</b>
+      <div id="favList"></div>
+      <label for="orsKey">Clé OpenRouteService (facultative)</label>
+      <input id="orsKey" type="password" autocomplete="off" spellcheck="false" placeholder="Laisse vide pour le serveur OSM sans compte">
+      <div class="muted xs" style="line-height:1.5">Sans clé, les itinéraires viennent du serveur vélo communautaire d'OpenStreetMap (FOSSGIS). Avec une clé gratuite OpenRouteService, l'app utilise son profil « vélo électrique ». La clé reste sur cet appareil.</div>
+    </div>
+
     <h2>Objectif</h2>
     <div class="card">
       <label for="goal" style="margin-top:0">Objectif hebdomadaire (km), affiché dans les statistiques</label>
@@ -422,6 +469,24 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
   </section>
 </main>
 
+<div class="sheet" id="navSheet" role="dialog" aria-modal="true" aria-labelledby="navSheetTitle">
+  <div class="sheetin">
+    <div class="top"><h1 id="navSheetTitle" style="font-size:24px">Destination</h1>
+      <button class="iconbtn" id="navClose" aria-label="Fermer"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
+    <label for="navQ" style="margin:0">Adresse ou lieu</label>
+    <input id="navQ" type="text" placeholder="ex. 12 rue de la République, Lyon" autocomplete="off" enterkeyhint="search">
+    <div class="favs" id="sheetFavs"></div>
+    <div id="navResults"></div>
+    <div id="navPreview" hidden>
+      <div class="pmap dark-tiles"><div id="pMap"></div></div>
+      <div id="navSummary"></div>
+      <div class="row wrap"><button class="btn primary" id="navGo">Démarrer le guidage</button><button class="btn" id="navFav">Ajouter aux favoris</button></div>
+      <div class="muted xs" id="navGoHint"></div>
+    </div>
+    <div class="muted xs" id="navAttrib">Recherche : IGN Géoplateforme · Itinéraires : OpenStreetMap</div>
+  </div>
+</div>
+
 <nav class="tabbar" aria-label="Navigation principale"><div class="in">
   <button data-tab="ride" class="on"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17" r="3.5"></circle><circle cx="18.5" cy="17" r="3.5"></circle><path d="M5.5 17l4-8h6l3 8M9.5 9l3 8h-7M14 5h3l1.5 4"></path></svg>Rouler</button>
   <button data-tab="history"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3 2"></path></svg>Historique</button>
@@ -431,8 +496,8 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.10.1 bêta';
-const APP_DATE = '7 novembre 2026';
+const APP_VERSION = '0.11 bêta';
+const APP_DATE = '8 novembre 2026';
 
 const $ = id => document.getElementById(id);
 $('verChip').textContent = 'v' + APP_VERSION;
@@ -736,6 +801,8 @@ function onFix(pos){
   fix = {t:pos.timestamp, lat:c.latitude, lon:c.longitude, acc:c.accuracy, ele:c.altitude, gspeed:c.speed};
   $('cGps').textContent = `GPS · ${Math.round(c.accuracy)} m`;
   showOnMap(fix);
+  rememberPos(fix);
+  if (nav) navOnFix(fix);
   if (!trip || c.accuracy > 30) return;
   const last = trip.points[trip.points.length-1];
   if (last){
@@ -1004,6 +1071,7 @@ async function stopTrip(){
   clearInterval(tripClock); stopGps();
   try{ wakeLock && wakeLock.release(); }catch(e){}
   const t = trip; trip = null; cockpitOpen = false;
+  if (nav) navEnd();
   finalize(t, Date.now(), num(state.soc), num(state.total));
   await dbPut(t);
   vibrate([60, 60, 60]);
@@ -1244,6 +1312,7 @@ async function syncAll(manual=false){
   setSync('busy','Synchronisation…');
   try{
     await syncBikes();
+    await syncPlaces();
     const local = await dbAll();
     const justSent = new Set();
     const toSend = local.filter(t=>!t.inProgress && !t.synced);
@@ -1801,6 +1870,7 @@ function renderAppCard(){
 }
 function renderSettings(){
   renderAppCard();
+  renderFavSettings();
   $('bikeList').innerHTML = bikes.length ? bikes.map(b => {
     const n = tripsCache.filter(t => t.bikeId === b.id).length;
     return `<div class="bikerow"><div><b>${esc(b.name)}</b><div class="muted xs">${n} trajet${n>1?'s':''} · compteur ${fr(b.lastOdo)} km</div></div>
@@ -1812,6 +1882,347 @@ function renderSettings(){
 }
 $('bikeList').onclick = e => { const b = e.target.closest('button[data-rename]'); if (b) renameBike(b.dataset.rename); };
 $('goal').onchange = () => { const v = num($('goal').value); lsSet('fiido_goal', v && v > 0 ? v : ''); };
+
+// ================= Guidage GPS =================
+// Recherche : IGN Géoplateforme (gratuit, sans clé). Itinéraires vélo : serveur OSM de FOSSGIS (sans clé),
+// ou OpenRouteService profil « vélo électrique » si une clé est saisie dans les Réglages.
+let places = lsGet('fiido_places', []);           // favoris [{id, name, sub, lat, lon, updatedAt, deleted}]
+let lastPos = lsGet('fiido_lastpos', null);       // dernière position connue, pour orienter la recherche
+let nav = null;                                   // guidage en cours
+let navLayer = null, navRouteLine = null, navDestMarker = null;
+let plan = null, pmap = null, pLayer = null, searchTimer = null, searchSeq = 0;
+const favs = () => places.filter(p => !p.deleted);
+function storePlaces(){ lsSet('fiido_places', places); renderFavs(); if (screen === 'settings') renderSettings(); }
+
+const ICONS = {
+  straight: '<path d="M12 20V5M6 11l6-6 6 6"/>',
+  'slight-right': '<path d="M8 21v-7l8-8M10 6h6v6"/>',
+  right: '<path d="M6 21v-7a5 5 0 0 1 5-5h8M14 4l5 5-5 5"/>',
+  'sharp-right': '<path d="M7 3v9a5 5 0 0 0 5 5h1l5-5M18 18v-6h-6"/>',
+  uturn: '<path d="M8 21V9a4 4 0 0 1 8 0v6M12 12l4 4 4-4"/>',
+  roundabout: '<circle cx="12" cy="9" r="4"/><path d="M12 13v8M16 9h5M18 6l3 3-3 3"/>',
+  arrive: '<path d="M6 21V4h12l-2.5 4L18 12H6"/>',
+};
+function navIcon(kind, size=44){
+  const mirror = /left/.test(kind);
+  const base = kind.replace('left', 'right');
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"${mirror ? ' style="transform:scaleX(-1)"' : ''}>${ICONS[base] || ICONS.straight}</svg>`;
+}
+const fmtNavDist = m => m >= 1000 ? fr(m/1000, 1) + ' km' : (m >= 100 ? Math.round(m/10)*10 : Math.max(0, Math.round(m/5)*5)) + ' m';
+
+// ---- Recherche de destination (IGN Géoplateforme)
+async function geoSearch(q){
+  const bias = fix || lastPos;
+  const near = bias ? `&lat=${bias.lat.toFixed(4)}&lon=${bias.lon.toFixed(4)}` : '';
+  const one = async (index, limit) => {
+    const r = await fetch(`https://data.geopf.fr/geocodage/search?q=${encodeURIComponent(q)}&index=${index}&limit=${limit}&autocomplete=1${near}`);
+    if (!r.ok) throw new Error('recherche indisponible (' + r.status + ')');
+    return ((await r.json()).features || []).map(f => geoItem(f, index));
+  };
+  const [a, p] = await Promise.allSettled([one('address', 5), one('poi', 4)]);
+  if (a.status === 'rejected' && p.status === 'rejected') throw a.reason;
+  return [...(a.value || []), ...(p.value || [])].filter(x => x.name && isFinite(x.lat) && isFinite(x.lon));
+}
+function geoItem(f, kind){
+  const p = f.properties || {}, one = v => Array.isArray(v) ? v[0] : v;
+  const city = one(p.city) || '', pc = one(p.postcode) || '';
+  const name = kind === 'poi' ? (one(p.toponym) || one(p.name) || p.label) : (p.name || p.label);
+  const sub = kind === 'poi' ? [one(p.category), city].filter(Boolean).join(' · ') : [pc, city].filter(Boolean).join(' ');
+  const c = (f.geometry && f.geometry.coordinates) || [];
+  return { name, sub, lat: c[1], lon: c[0], poi: kind === 'poi' };
+}
+
+// ---- Calcul d'itinéraire
+function finishRoute(coords, distance, duration, steps, provider){
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) cum.push(cum[i-1] + haversine({lat:coords[i-1][0], lon:coords[i-1][1]}, {lat:coords[i][0], lon:coords[i][1]}));
+  return { coords, cum, distance: distance || cum[cum.length-1], duration, steps, provider };
+}
+function nearestIdx(coords, lat, lon, from){
+  let best = from, bd = Infinity;
+  for (let i = from; i < coords.length; i++){ const d = (coords[i][0]-lat)**2 + ((coords[i][1]-lon)*Math.cos(lat*Math.PI/180))**2; if (d < bd){ bd = d; best = i; } }
+  return best;
+}
+const DIRS = {uturn:'Faites demi-tour', 'sharp right':'Tournez franchement à droite', right:'Tournez à droite', 'slight right':'Tournez légèrement à droite',
+  straight:'Continuez tout droit', 'slight left':'Tournez légèrement à gauche', left:'Tournez à gauche', 'sharp left':'Tournez franchement à gauche'};
+function osrmStep(st){
+  const m = st.maneuver || {}, mod = m.modifier || 'straight', on = st.name ? ` sur ${st.name}` : '';
+  const kind = /roundabout|rotary/.test(m.type) ? 'roundabout' : m.type === 'arrive' ? 'arrive' : m.type === 'depart' ? 'straight'
+    : ({uturn:'uturn', 'sharp right':'sharp-right', right:'right', 'slight right':'slight-right', 'slight left':'slight-left', left:'left', 'sharp left':'sharp-left'})[mod] || 'straight';
+  let text;
+  if (m.type === 'depart') text = `Partez${on}`;
+  else if (m.type === 'arrive') text = 'Vous êtes arrivé';
+  else if (kind === 'roundabout') text = m.exit ? `Au rond-point, prenez la ${m.exit === 1 ? '1re' : m.exit + 'e'} sortie${on}` : `Au rond-point${on}`;
+  else if (m.type === 'fork') text = (/left/.test(mod) ? 'Serrez à gauche' : /right/.test(mod) ? 'Serrez à droite' : 'Continuez') + on;
+  else text = (DIRS[mod] || 'Continuez') + on;
+  return { kind, text, name: st.name || '', type: m.type, mod, loc: m.location };
+}
+async function osrmRoute(o, d){
+  const r = await fetch(`https://routing.openstreetmap.de/routed-bike/route/v1/bike/${o.lon},${o.lat};${d.lon},${d.lat}?overview=full&geometries=geojson&steps=true`);
+  if (!r.ok) throw new Error('serveur d’itinéraires indisponible (' + r.status + ')');
+  const j = await r.json();
+  if (j.code !== 'Ok' || !j.routes || !j.routes.length) throw new Error('aucun itinéraire trouvé');
+  const rt = j.routes[0], coords = rt.geometry.coordinates.map(c => [c[1], c[0]]);
+  let from = 0;
+  const steps = (rt.legs[0].steps || []).map(osrmStep)
+    .filter(s => !((s.type === 'new name' || s.type === 'continue') && (s.mod === 'straight' || !s.mod)))   // simples changements de nom de rue
+    .map(s => { from = nearestIdx(coords, s.loc[1], s.loc[0], from); return {...s, idx: from}; });
+  return finishRoute(coords, rt.distance, rt.duration, steps, 'OpenStreetMap · FOSSGIS');
+}
+async function orsRoute(o, d, key){
+  const r = await fetch('https://api.openrouteservice.org/v2/directions/cycling-electric/geojson', {
+    method: 'POST', headers: {'Authorization': key, 'Content-Type': 'application/json', 'Accept': 'application/geo+json'},
+    body: JSON.stringify({coordinates: [[o.lon, o.lat], [d.lon, d.lat]], language: 'fr', instructions: true, units: 'm'})});
+  if (!r.ok) throw new Error('OpenRouteService : ' + (r.status === 401 || r.status === 403 ? 'clé refusée' : 'erreur ' + r.status));
+  const f = (await r.json()).features[0], coords = f.geometry.coordinates.map(c => [c[1], c[0]]);
+  const KIND = {0:'left',1:'right',2:'sharp-left',3:'sharp-right',4:'slight-left',5:'slight-right',6:'straight',7:'roundabout',8:'roundabout',9:'uturn',10:'arrive',11:'straight',12:'slight-left',13:'slight-right'};
+  const steps = (f.properties.segments[0].steps || []).filter(s => s.type !== 6 && s.type !== 8)
+    .map(s => ({kind: KIND[s.type] || 'straight', text: s.instruction, name: s.name && s.name !== '-' ? s.name : '', idx: s.way_points[0], type: s.type}));
+  return finishRoute(coords, f.properties.summary.distance, f.properties.summary.duration, steps, 'OpenRouteService · vélo électrique');
+}
+async function computeRoute(o, d){
+  const key = lsGet('fiido_ors', '');
+  if (key){ try{ return await orsRoute(o, d, key); }catch(e){ log(e.message + ' — itinéraire OSM à la place'); } }
+  return osrmRoute(o, d);
+}
+// Vitesse de référence pour l'heure d'arrivée : ta moyenne réelle en mouvement
+function refSpeed(){ const a = aggregate(tripsCache.slice(0, 20)); return a.avg && a.avg > 8 ? a.avg : 18; }
+
+// ---- Position de départ
+function currentPosition(){
+  if (fix && Date.now() - fix.t < 60000) return Promise.resolve(fix);
+  return new Promise((res, rej) => {
+    if (!('geolocation' in navigator)) return rej(new Error('GPS indisponible'));
+    navigator.geolocation.getCurrentPosition(p => { const f = {t: Date.now(), lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy}; rememberPos(f); res(f); },
+      e => rej(new Error(e.code === 1 ? 'accès à la position refusé' : 'position introuvable')), {enableHighAccuracy: true, timeout: 20000, maximumAge: 30000});
+  });
+}
+function rememberPos(f){ if (!lastPos || Date.now() - (lastPos.t || 0) > 60000){ lastPos = {lat: f.lat, lon: f.lon, t: Date.now()}; lsSet('fiido_lastpos', lastPos); } }
+
+// ---- Fenêtre « Destination »
+function openNavSheet(){
+  $('navSheet').classList.add('on'); document.body.style.overflow = 'hidden';
+  $('navQ').value = ''; $('navResults').innerHTML = ''; $('navPreview').hidden = true; plan = null;
+  renderFavs(); setTimeout(() => $('navQ').focus(), 50);
+}
+function closeNavSheet(){ $('navSheet').classList.remove('on'); document.body.style.overflow = ''; }
+$('navClose').onclick = closeNavSheet;
+$('btnNavOpen').onclick = openNavSheet;
+$('btnNavCockpit').onclick = () => nav ? (confirm('Arrêter le guidage en cours ?') && navEnd()) : openNavSheet();
+$('navStop').onclick = () => { if (confirm('Arrêter le guidage ? Le trajet continue d’être enregistré.')) navEnd(); };
+
+$('navQ').oninput = () => {
+  clearTimeout(searchTimer);
+  const q = $('navQ').value.trim();
+  if (q.length < 3){ $('navResults').innerHTML = ''; return; }
+  searchTimer = setTimeout(async () => {
+    const seq = ++searchSeq;
+    $('navResults').innerHTML = '<div class="muted sm">Recherche…</div>';
+    try{
+      const items = await geoSearch(q);
+      if (seq !== searchSeq) return;
+      $('navResults').innerHTML = items.length ? items.map((x, i) => `<button class="res" data-i="${i}">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${x.poi ? '<path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/>' : '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>'}</svg>
+          <span style="min-width:0"><span class="t">${esc(x.name)}</span><br><span class="s">${esc(x.sub)}</span></span></button>`).join('')
+        : '<div class="muted sm">Aucun résultat.</div>';
+      $('navResults').onclick = e => { const b = e.target.closest('[data-i]'); if (b) planTo(items[Number(b.dataset.i)]); };
+    }catch(e){ if (seq === searchSeq) $('navResults').innerHTML = `<div class="muted sm">${esc(e.message)}. Vérifie ta connexion internet.</div>`; }
+  }, 350);
+};
+
+async function planTo(dest){
+  if (!$('navSheet').classList.contains('on')) openNavSheet();
+  $('navResults').innerHTML = ''; $('navQ').value = dest.name;
+  $('navPreview').hidden = false;
+  $('navSummary').innerHTML = `<div class="muted sm">Calcul de l'itinéraire vers <b style="color:var(--ink)">${esc(dest.name)}</b>…</div>`;
+  $('navGo').disabled = true;
+  try{
+    const o = await currentPosition();
+    const route = await computeRoute(o, dest);
+    plan = {dest, route};
+    const min = Math.round(route.distance / 1000 / refSpeed() * 60);
+    const eta = new Date(Date.now() + min * 60000).toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+    $('navSummary').innerHTML = `<div class="row" style="gap:18px;align-items:baseline">
+        <div><span class="big" style="font-size:28px">${fr(route.distance/1000, 1)}</span><span class="muted"> km</span></div>
+        <div><span class="big" style="font-size:28px">${min}</span><span class="muted"> min</span></div>
+        <div class="muted sm">arrivée vers ${eta}</div></div>
+      <div class="muted xs" style="margin-top:4px">${esc(dest.name)}${dest.sub ? ' · ' + esc(dest.sub) : ''} · temps estimé avec ta vitesse moyenne (${fr(refSpeed(), 0)} km/h)</div>`;
+    drawPreview(route, dest);
+    const ready = !!trip || (connected() && !!currentBike);
+    $('navGo').disabled = !ready;
+    $('navGo').textContent = trip ? 'Démarrer le guidage' : 'Démarrer le trajet et le guidage';
+    $('navGoHint').textContent = ready ? '' : "Connecte d'abord le vélo depuis l'onglet Rouler pour démarrer le trajet.";
+    $('navFav').style.display = favs().some(f => Math.abs(f.lat - dest.lat) < 1e-4 && Math.abs(f.lon - dest.lon) < 1e-4) ? 'none' : '';
+    $('navAttrib').textContent = `Itinéraire : ${route.provider} · Recherche : IGN Géoplateforme · Carte © OpenStreetMap`;
+  }catch(e){
+    $('navSummary').innerHTML = `<div class="status err">Impossible de calculer l'itinéraire : ${esc(e.message)}.</div>`;
+  }
+}
+function drawPreview(route, dest){
+  if (!window.L) return;
+  if (!pmap){
+    pmap = L.map('pMap', {zoomControl:false, attributionControl:false});
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(pmap);
+    pLayer = L.layerGroup().addTo(pmap);
+  }
+  pLayer.clearLayers();
+  L.polyline(route.coords, {color:'#2DD4BF', weight:6}).addTo(pLayer);
+  L.circleMarker(route.coords[0], {radius:7, color:'#0B0E10', weight:3, fillColor:'#60A5FA', fillOpacity:1}).addTo(pLayer);
+  L.circleMarker([dest.lat, dest.lon], {radius:8, color:'#0B0E10', weight:3, fillColor:'#EF4444', fillOpacity:1}).addTo(pLayer);
+  setTimeout(() => { pmap.invalidateSize(); pmap.fitBounds(L.latLngBounds(route.coords), {padding:[24,24]}); }, 60);
+}
+$('navGo').onclick = () => {
+  if (!plan) return;
+  const p = plan; closeNavSheet();
+  if (!trip){ if (!(connected() && currentBike)) return; startTrip(); }
+  startNav(p.dest, p.route);
+};
+$('navFav').onclick = () => {
+  if (!plan) return;
+  const name = prompt('Nom de ce lieu favori (ex. Maison, Travail) :', plan.dest.name);
+  if (!name || !name.trim()) return;
+  places.push({id: 'p' + Date.now().toString(36), name: name.trim().slice(0, 30), sub: plan.dest.sub || plan.dest.name,
+    lat: plan.dest.lat, lon: plan.dest.lon, updatedAt: Date.now()});
+  storePlaces(); $('navFav').style.display = 'none'; syncAll();
+};
+
+// ---- Favoris
+function favChip(f){ return `<button class="fav" data-fav="${esc(f.id)}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="var(--sport)"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>${esc(f.name)}</button>`; }
+function renderFavs(){
+  const html = favs().map(favChip).join('');
+  $('favRow').innerHTML = html; $('favRow').style.display = html ? 'flex' : 'none';
+  $('sheetFavs').innerHTML = html ? html : '<span class="muted xs">Astuce : après avoir choisi une destination, ajoute-la aux favoris (Maison, Travail…).</span>';
+}
+const favClick = e => { const b = e.target.closest('[data-fav]'); if (!b) return; const f = favs().find(x => x.id === b.dataset.fav); if (f) planTo(f); };
+$('favRow').onclick = favClick; $('sheetFavs').onclick = favClick;
+function renderFavSettings(){
+  $('favList').innerHTML = favs().length ? favs().map(f => `<div class="bikerow"><div style="min-width:0"><b>${esc(f.name)}</b><div class="muted xs">${esc(f.sub || '')}</div></div>
+      <div class="row" style="gap:4px"><button class="btn" data-favren="${esc(f.id)}">Renommer</button><button class="btn danger" data-favdel="${esc(f.id)}" aria-label="Supprimer ${esc(f.name)}">✕</button></div></div>`).join('')
+    : '<div class="muted sm">Aucun favori. Choisis une destination puis touche « Ajouter aux favoris ».</div>';
+  $('orsKey').value = lsGet('fiido_ors', '') ? '••••••••' : '';
+}
+$('favList').onclick = e => {
+  const r = e.target.closest('[data-favren]'), d = e.target.closest('[data-favdel]');
+  const f = places.find(x => x.id === (r || d)?.dataset[r ? 'favren' : 'favdel']); if (!f) return;
+  if (r){ const n = prompt('Nouveau nom :', f.name); if (!n || !n.trim()) return; f.name = n.trim().slice(0, 30); }
+  else { if (!confirm(`Supprimer le favori « ${f.name} » ?`)) return; f.deleted = true; }
+  f.updatedAt = Date.now(); storePlaces(); syncAll();
+};
+$('orsKey').onchange = () => { const v = $('orsKey').value.trim(); if (v.startsWith('••')) return; lsSet('fiido_ors', v); renderFavSettings(); };
+async function syncPlaces(){
+  const r = await gh('/contents/places.json');
+  let remote = [], sha = null;
+  if (r.ok){ const j = await r.json(); sha = j.sha; try{ remote = JSON.parse(fromB64(j.content)); }catch(e){} }
+  else if (r.status !== 404) throw new Error(ghError(r));
+  const m = new Map(remote.map(p => [p.id, p]));
+  for (const p of places){ const o = m.get(p.id); if (!o || (p.updatedAt||0) >= (o.updatedAt||0)) m.set(p.id, p); }
+  const byId = (a,b) => a.id < b.id ? -1 : 1, merged = [...m.values()].sort(byId);
+  const changed = JSON.stringify(merged) !== JSON.stringify([...remote].sort(byId));
+  places = merged; storePlaces();
+  if (changed){
+    const p = await gh('/contents/places.json', {method:'PUT', body:{message:'Mise à jour des lieux favoris', content: toB64(JSON.stringify(merged, null, 1)), ...(sha ? {sha} : {})}});
+    if (!p.ok) throw new Error(ghError(p));
+  }
+}
+
+// ---- Guidage en cours
+function startNav(dest, route){
+  nav = {dest, route, along: 0, idx: 0, off: 0, lastRoute: Date.now(), cues: {}, arrivedAt: null};
+  ensureMap();
+  if (map && !navLayer){ navLayer = L.layerGroup().addTo(map); }
+  drawNavRoute();
+  follow = true;
+  if (fix) navOnFix(fix); else renderNav();
+  vibrate(60);
+  log('Guidage vers ' + dest.name);
+}
+function navEnd(){
+  nav = null;
+  if (navLayer) navLayer.clearLayers();
+  navRouteLine = navDestMarker = null;
+  renderNav();
+}
+function drawNavRoute(){
+  if (!navLayer || !nav) return;
+  navLayer.clearLayers();
+  navRouteLine = L.polyline(nav.route.coords, {color:'#2DD4BF', weight:8, opacity:.55}).addTo(navLayer);
+  navDestMarker = L.circleMarker([nav.dest.lat, nav.dest.lon], {radius:9, color:'#0B0E10', weight:3, fillColor:'#EF4444', fillOpacity:1}).addTo(navLayer);
+  if (line) line.bringToFront();
+}
+// Projection de la position sur l'itinéraire (coordonnées locales en mètres)
+function projectOnRoute(f, route, hint){
+  const kx = Math.cos(f.lat * Math.PI/180) * 111320, ky = 110540, c = route.coords;
+  const scan = (lo, hi) => { let best = {d: Infinity, idx: 0, along: 0};
+    for (let i = Math.max(0, lo); i < Math.min(c.length - 1, hi); i++){
+      const ax = (c[i][1]-f.lon)*kx, ay = (c[i][0]-f.lat)*ky, bx = (c[i+1][1]-f.lon)*kx, by = (c[i+1][0]-f.lat)*ky;
+      const dx = bx-ax, dy = by-ay, L2 = dx*dx + dy*dy, t = L2 ? Math.max(0, Math.min(1, -(ax*dx + ay*dy)/L2)) : 0;
+      const d = Math.hypot(ax + t*dx, ay + t*dy);
+      if (d < best.d) best = {d, idx: i, t, along: route.cum[i] + t*(route.cum[i+1]-route.cum[i]), lat: c[i][0] + t*(c[i+1][0]-c[i][0]), lon: c[i][1] + t*(c[i+1][1]-c[i][1])};
+    }
+    return best; };
+  let p = scan(hint - 5, hint + 200);
+  if (p.d > 50) { const all = scan(0, c.length); if (all.d < p.d) p = all; }
+  return p;
+}
+async function navOnFix(f){
+  if (!nav) return;
+  const route = nav.route, p = projectOnRoute(f, route, nav.idx);
+  const remaining = Math.max(0, route.cum[route.cum.length-1] - p.along);
+  // arrivée
+  if (!nav.arrivedAt && (remaining < 20 || haversine(f, nav.dest) < 25)){
+    nav.arrivedAt = Date.now(); vibrate([120, 80, 120, 80, 120]); renderNav();
+    setTimeout(() => { if (nav && nav.arrivedAt) navEnd(); }, 10000);
+    return;
+  }
+  if (nav.arrivedAt) return;
+  // écart à l'itinéraire : recalcul après 3 positions fiables à plus de 35 m
+  if (p.d > 35 && (f.acc ?? 99) <= 30) nav.off++; else if (p.d < 25) nav.off = 0;
+  if (nav.off >= 3 && Date.now() - nav.lastRoute > 12000 && !nav.rerouting){
+    nav.rerouting = true; nav.lastRoute = Date.now(); renderNav();
+    try{
+      const r = await computeRoute(f, nav.dest);
+      if (nav){ nav.route = r; nav.idx = 0; nav.along = 0; nav.off = 0; nav.cues = {}; drawNavRoute(); log('Itinéraire recalculé'); vibrate([40, 40, 40]); }
+    }catch(e){ log('Recalcul impossible : ' + e.message); }
+    if (nav){ nav.rerouting = false; navOnFix(f); }
+    return;
+  }
+  nav.idx = p.idx; nav.along = p.along; nav.remaining = remaining;
+  // partie restante seulement : le trajet parcouru disparaît
+  if (navRouteLine && p.d < 40) navRouteLine.setLatLngs([[p.lat, p.lon], ...route.coords.slice(p.idx + 1)]);
+  // prochaine manœuvre et vibrations à l'approche
+  const step = route.steps.find(s => route.cum[s.idx] > p.along + 3 && s.kind !== 'straight') || route.steps[route.steps.length-1];
+  nav.step = step; nav.toStep = step ? Math.max(0, route.cum[step.idx] - p.along) : remaining;
+  const key = step ? step.idx : 'end';
+  if (step && step.kind !== 'arrive'){
+    if (nav.toStep < 150 && nav.toStep > 40 && !nav.cues[key + 'a']){ nav.cues[key + 'a'] = 1; vibrate(70); }
+    if (nav.toStep <= 30 && !nav.cues[key + 'b']){ nav.cues[key + 'b'] = 1; vibrate([90, 60, 90]); }
+  }
+  if (map && follow && map.getZoom() < 16) map.setZoom(17);
+  renderNav();
+}
+function renderNav(){
+  const on = !!nav;
+  $('scr-cockpit').classList.toggle('nav', on);
+  $('navBar').classList.toggle('on', on);
+  $('navSub').classList.toggle('on', on);
+  $('btnNavCockpit').setAttribute('aria-label', on ? 'Arrêter le guidage' : 'Choisir une destination');
+  $('btnNavCockpit').classList.toggle('active', on);
+  $('navCardSub').textContent = on ? 'Guidage en cours vers ' + nav.dest.name : '';
+  if (!on) return;
+  if (nav.arrivedAt){
+    $('navIco').innerHTML = navIcon('arrive'); $('navDist').textContent = 'Arrivé';
+    $('navTxt').textContent = nav.dest.name; $('navSub').textContent = 'Vous êtes arrivé à destination.';
+    return;
+  }
+  if (nav.rerouting){ $('navDist').textContent = '…'; $('navTxt').textContent = 'Recalcul de l’itinéraire…'; return; }
+  const s = nav.step || nav.route.steps[1] || nav.route.steps[0];
+  $('navIco').innerHTML = navIcon(s ? s.kind : 'straight');
+  $('navDist').textContent = fmtNavDist(nav.toStep ?? nav.route.distance);
+  $('navTxt').textContent = s ? s.text : 'Suivez l’itinéraire';
+  const rem = nav.remaining ?? nav.route.distance;
+  const eta = new Date(Date.now() + rem / 1000 / refSpeed() * 3600000).toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+  $('navSub').textContent = `${nav.dest.name} · ${fmtNavDist(rem)} · arrivée vers ${eta}`;
+}
 
 // ================= Température extérieure (Open-Meteo, gratuit, sans clé) =================
 async function fetchTemp(t){
@@ -1898,6 +2309,7 @@ ${pts}
   }catch(e){ log('Récupération impossible : '+e.message); }
   await loadTrips();
   renderSyncChip();
+  renderFavs();
   const hm = location.hash.match(/^#trajet-(\d+)$/);
   if (hm) openDetail(Number(hm[1]), false); else showScreen('ride');
   await syncAll();

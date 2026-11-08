@@ -393,6 +393,13 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
       </div>
     </div>
 
+    <div class="card" style="display:flex;flex-direction:column;gap:12px">
+      <div class="row between"><h3>Effet de la température</h3><span class="muted xs">tous tes trajets</span></div>
+      <div class="mrow muted" style="font-size:11px;grid-template-columns:64px 1fr 66px 58px"><span></span><span></span><span style="text-align:right">conso.</span><span style="text-align:right">autonomie</span></div>
+      <div id="tempRows" style="display:flex;flex-direction:column;gap:10px"></div>
+      <div class="muted xs" id="tempTxt" style="line-height:1.5"></div>
+    </div>
+
     <div class="card" style="display:flex;flex-direction:column;gap:10px">
       <h3>Énergie</h3>
       <div class="grid3" id="energy"></div>
@@ -496,7 +503,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.11 bêta';
+const APP_VERSION = '0.12 bêta';
 const APP_DATE = '8 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -510,12 +517,20 @@ function banner(id, html, cls=''){
   el.className = 'banner ' + cls; el.innerHTML = html;
   return el;
 }
+// Dans l'application Android, l'interface est embarquée : le chargeur (www/index.html) fournit window.FIIDO_LOADER
 async function checkUpdate(){
   if (location.protocol === 'file:') return;
+  const LD = window.FIIDO_LOADER;
   try{
-    const r = await fetch(location.pathname + '?check=' + Date.now(), {cache:'no-store'});
-    const m = (await r.text()).match(/APP_VERSION\s*=\s*'([^']+)'/);
-    if (m && m[1] !== APP_VERSION){
+    const r = await fetch(LD ? LD.remote + '?t=' + Date.now() : location.pathname + '?check=' + Date.now(), {cache:'no-store'});
+    if (!r.ok) return;
+    const html = await r.text();
+    const m = html.match(/APP_VERSION\s*=\s*'([^']+)'/);
+    if (m && m[1] !== APP_VERSION && LD){
+      LD.store(html, m[1]);     // gardée sur le téléphone : utilisée au prochain démarrage, même sans réseau
+      banner('updateBanner', `<span>La version ${esc(m[1])} est prête.</span><button class="btn primary" id="btnReload">Redémarrer</button>`);
+      $('btnReload').onclick = () => location.reload();
+    } else if (m && m[1] !== APP_VERSION){
       banner('updateBanner', `<span>La version ${esc(m[1])} est disponible.</span><button class="btn primary" id="btnReload">Mettre à jour</button>`);
       $('btnReload').onclick = () => location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]) + '-' + Date.now());
     }
@@ -592,7 +607,7 @@ const Cap = window.Capacitor;
 const NATIVE = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
 const hexToBytes = h => new Uint8Array((String(h).match(/[0-9a-f]{2}/gi) || []).map(x => parseInt(x, 16)));
 
-let device=null, timer=null, busy=false, buf=[], manualDisconnect=false, connState='off', lastPoll=0;
+let device=null, timer=null, busy=false, buf=[], manualDisconnect=false, connState='off', lastPoll=0, autoInfo='', connecting=false;
 const rawFrames = {};
 const connected = () => !!(device && device.connected);
 
@@ -601,9 +616,7 @@ const Web = {
   tx: null,
   async request(){
     const d = await navigator.bluetooth.requestDevice({ filters:[{namePrefix:'Fiido'}], optionalServices:[SVC] });
-    const dev = {id: d.id, name: d.name, connected: false, web: d};
-    d.addEventListener('gattserverdisconnected', () => { dev.connected = false; onDisconnected(); });
-    return dev;
+    return makeWebDev(d);
   },
   async open(dev){
     const server = await dev.web.gatt.connect();
@@ -640,6 +653,11 @@ const Native = {
   async close(dev){ await this.call('disconnect', {deviceId: dev.id}); if (dev.connected){ dev.connected = false; onDisconnected(); } },
 };
 const BT = NATIVE ? Native : Web;
+function makeWebDev(d){
+  const dev = {id: d.id, name: d.name, connected: false, web: d};
+  d.addEventListener('gattserverdisconnected', () => { if (dev.connected){ dev.connected = false; onDisconnected(); } });
+  return dev;
+}
 
 function setConn(s){ connState = s; renderConn(); }
 function renderConn(){
@@ -652,6 +670,7 @@ function renderConn(){
 }
 
 $('btnConnect').onclick = async () => {
+  if (connecting) return;
   if (!NATIVE && !navigator.bluetooth){ alert("Ce navigateur ne gère pas le Bluetooth web. Utilisez Chrome sur Android ou sur ordinateur, ou l'application Fiido Explorer."); return; }
   try{
     setConn('busy');
@@ -669,7 +688,8 @@ async function setupGatt(){
   buf = [];
   await send(HANDSHAKE); await sleep(300);
   clearInterval(timer); timer = setInterval(rotation, 2000); rotation();
-  manualDisconnect = false;
+  manualDisconnect = false; autoInfo = '';
+  lsSet('fiido_lastdev', {id: device.id, name: device.name});     // pour la connexion automatique
   setConn('ok'); log('Connecté à ' + device.name + (NATIVE ? ' (application)' : ''));
   renderRide();
 }
@@ -688,6 +708,36 @@ async function onDisconnected(){
   } else setConn('off');
   renderRide();
 }
+
+// Connexion automatique : à l'ouverture, puis toutes les 20 s tant que l'app est visible.
+// Désactivée après une déconnexion volontaire, jusqu'à la prochaine connexion manuelle.
+async function autoConnect(){
+  const last = lsGet('fiido_lastdev', null);
+  if (!last || connected() || connecting || manualDisconnect || document.visibilityState !== 'visible') return;
+  connecting = true;
+  try{
+    let dev = null;
+    if (NATIVE){
+      if (!Native.ready){ await Native.call('initialize', {}); Native.ready = true; }
+      dev = {id: last.id, name: last.name || 'Fiido', connected: false};
+    } else if (navigator.bluetooth && navigator.bluetooth.getDevices){
+      const d = (await navigator.bluetooth.getDevices()).find(x => x.id === last.id);
+      if (d) dev = makeWebDev(d);
+    }
+    if (dev){
+      autoInfo = 'Recherche de ton vélo…'; setConn('busy'); renderRide();
+      device = dev;
+      await setupGatt();
+      log('Connexion automatique à ' + dev.name);
+    }
+  }catch(e){
+    if (!connected()){ device = null; setConn(trip ? 'lost' : 'off'); autoInfo = 'Vélo introuvable : allume-le, l’app réessaie toute seule.'; renderRide(); }
+    log('Connexion automatique impossible : ' + (e.message || e));
+  }
+  connecting = false;
+}
+setInterval(autoConnect, 20000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(autoConnect, 600); });
 
 async function send(frame){ await BT.write(device, frame); }
 async function rotation(){
@@ -1013,7 +1063,7 @@ function renderRide(){
   $('rLive').style.display = live ? 'flex' : 'none';
   if (!connected()){
     $('rName').textContent = connState === 'lost' ? bikeName(currentBike) : 'Aucun vélo connecté';
-    $('rSub').textContent = connState === 'lost' ? 'Connexion perdue, nouvelle tentative…' : "Allumez le vélo, fermez l'app Fiido officielle, puis connectez-vous.";
+    $('rSub').textContent = connState === 'lost' ? 'Connexion perdue, nouvelle tentative…' : (autoInfo || "Allumez le vélo, fermez l'app Fiido officielle, puis connectez-vous.");
   } else if (!currentBike){
     $('rName').textContent = 'Vélo détecté'; $('rSub').textContent = 'Indiquez de quel vélo il s’agit.';
   }
@@ -1393,6 +1443,7 @@ function tripCard(t){
   const s = t.summary;
   const bits = [`${fr(s.dist)} km`, fmtHM(s.dur), `${fr(s.avg)} km/h`];
   if (s.used > 0) bits.push(`${s.used} %`);
+  if (t.weather && t.weather.temp != null) bits.push(`${Math.round(t.weather.temp)} °C`);
   const bikeLine = (bikes.length > 1 || !t.bikeId) ? `<div class="st" style="margin-top:2px">${esc(bikeName(t.bikeId))}</div>` : '';
   const mode = s.mode ? `<span class="mode" style="background:${MODE_COLORS[s.mode]||'#9AA6B0'}">${esc(s.mode)}</span>` : '';
   return `<button class="trip" data-open="${t.id}">${miniMap(t)}
@@ -1782,7 +1833,32 @@ function renderStats(){
   ].filter(r => r[1]);
   $('records').innerHTML = recs.length ? recs.map(([l, t, f]) => `<button class="rec" data-open="${t.id}"><span><span class="muted sm">${l}</span><br><span class="xs" style="color:var(--dim);filter:brightness(1.6)">${day(t)}</span></span><span class="v">${f(t)}</span></button>`).join('')
     : '<div class="muted sm" style="padding:6px 0 12px">Les records apparaîtront après vos premiers trajets.</div>';
+  renderTempCard(all);
   renderHealth();
+}
+// Autonomie selon la température extérieure (tous niveaux d'assistance confondus)
+function renderTempCard(all){
+  const BANDS = [[-99, 5, '< 5 °C', '#60A5FA', 'sous 5 °C'], [5, 10, '5–10 °C', '#7DD3FC', 'entre 5 et 10 °C'], [10, 15, '10–15 °C', '#2DD4BF', 'entre 10 et 15 °C'],
+                 [15, 20, '15–20 °C', '#FCD34D', 'entre 15 et 20 °C'], [20, 99, '≥ 20 °C', '#FB923C', 'au-dessus de 20 °C']];
+  const withT = all.filter(t => t.weather && t.weather.temp != null);
+  const rows = BANDS.map(([lo, hi, label, color, phrase]) => {
+    const g = withT.filter(t => t.weather.temp >= lo && t.weather.temp < hi), mc = modeCons(g, null);
+    return {label, color, phrase, n: g.length, km: mc.km, cons: mc.cons, range: mc.cons ? 100/mc.cons : null};
+  }).filter(r => r.n);
+  const rmax = Math.max(1, ...rows.map(r => r.range || 0));
+  $('tempRows').innerHTML = rows.length ? rows.map(r => `<div class="mrow" style="grid-template-columns:64px 1fr 66px 58px"><span>${r.label}</span>
+      <div class="bar"><i style="width:${r.range ? (100*r.range/rmax).toFixed(0) : 0}%;background:${r.color}"></i></div>
+      <span style="text-align:right">${r.cons ? fr(r.cons) + ' %/km' : `<span class="muted xs">${fr(r.km)} km</span>`}</span><b style="text-align:right">${r.range ? Math.round(r.range) + ' km' : '—'}</b></div>`).join('')
+    : '<div class="muted sm">La température de chaque trajet est récupérée automatiquement : ce graphique se remplira au fil de tes sorties.</div>';
+  const known = rows.filter(r => r.range);
+  let txt = 'Autonomie estimée pour une charge complète, selon la température extérieure pendant le trajet.';
+  if (known.length >= 2){
+    const cold = known[0], warm = known[known.length-1], p = Math.round(100 * (warm.range - cold.range) / warm.range);
+    txt += p > 3 ? ` ${cap(cold.phrase)}, ton autonomie est d'environ ${p} % plus faible que sur tes trajets ${warm.phrase} (≈ ${Math.round(warm.range - cold.range)} km de moins).`
+                 : ` Pas d'écart marqué pour l'instant entre les trajets ${cold.phrase} et ${warm.phrase}.`;
+    txt += ' Les niveaux d’assistance utilisés jouent aussi : la comparaison s’affinera avec le nombre de trajets.';
+  } else if (rows.length) txt += ' Il faut environ 10 km cumulés dans une tranche de température pour l’estimer.';
+  $('tempTxt').textContent = txt;
 }
 let chargeFormFor = null;
 const WALL_EFFICIENCY = 0.88;    // pertes du chargeur (~12 %)
@@ -2312,6 +2388,7 @@ ${pts}
   renderFavs();
   const hm = location.hash.match(/^#trajet-(\d+)$/);
   if (hm) openDetail(Number(hm[1]), false); else showScreen('ride');
+  setTimeout(autoConnect, 800);
   await syncAll();
   backfillWeather();
 })();

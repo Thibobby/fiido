@@ -503,7 +503,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.12.1 bêta';
+const APP_VERSION = '0.12.2 bêta';
 const APP_DATE = '8 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -586,13 +586,22 @@ function xor(a){ let x=0; for(const b of a) x^=b; return x; }
 function poll(len, addr){ const f=[0x46,0x64,0x55,len,addr]; f.push(xor(f)); return new Uint8Array(f); }
 const HANDSHAKE = poll(0x0D,0x0D);
 const ROTATION = [poll(0x35,0x05), poll(0x0D,0x7B), poll(0x0C,0x96), poll(0x0C,0xC8)];
+// Vitesse/compteur/batterie (STATS) à chaque tour ; capacité, moteur et compteurs internes plus rarement
+let tick = 0;
+function framesFor(n){
+  const f = [ROTATION[0]];
+  if (n % 15 === 0) f.push(ROTATION[1]);
+  if (n % 30 === 5) f.push(ROTATION[2]);
+  if (n % 30 === 20) f.push(ROTATION[3]);
+  return f;
+}
 const NAMES = {0x0D:'HANDSHAKE',0x05:'STATS',0x7B:'BATTERY',0x96:'MOTOR',0xC8:'ENERGY'};
 const GEARS3 = ['Arrêt','Éco','Sport','Turbo'];
 const hex = a => Array.from(a,b=>b.toString(16).padStart(2,'0')).join(' ');
 
 // Valeurs brutes (onglet Réglages › Diagnostic)
 $('tiles').innerHTML = [
-  ['speed','Vitesse','km/h'],['soc','Batterie','%'],['gear','Assistance',''],['motor','Système',''],
+  ['speed','Vitesse','km/h'],['soc','Batterie','%'],['gear','Assistance',''],['motor','Moteur',''],
   ['light','Éclairage',''],['limit','Limiteur',''],['trip','Trajet vélo','km'],['total','Compteur','km'],
   ['mtemp','Temp. moteur','°C'],['uptime','Allumé depuis',''],['torque','Couple (brut)',''],['rpm','Cadence (brut)',''],
   ['voltage','Tension nominale','V'],['capacity','Capacité','Ah'],['wheel','Roue','pouces'],['mpower','Moteur nominal','W'],
@@ -607,7 +616,7 @@ const Cap = window.Capacitor;
 const NATIVE = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
 const hexToBytes = h => new Uint8Array((String(h).match(/[0-9a-f]{2}/gi) || []).map(x => parseInt(x, 16)));
 
-let device=null, timer=null, busy=false, buf=[], manualDisconnect=false, connState='off', lastPoll=0, autoInfo='', connecting=false;
+let device=null, busy=false, lastFrameAt=0, lastReconnTry=0, lostAt=null, lostNotified=false, buf=[], manualDisconnect=false, connState='off', lastPoll=0, autoInfo='', connecting=false;
 const rawFrames = {};
 const connected = () => !!(device && device.connected);
 
@@ -647,8 +656,12 @@ const Native = {
   async write(dev, frame){
     // le module natif attend l'hexadécimal collé, sans espaces (« 4664550d0d… »)
     const value = Array.from(frame, b => b.toString(16).padStart(2, '0')).join('');
-    try{ await this.call('writeWithoutResponse', {deviceId: dev.id, service: SVC, characteristic: TX, value}); }
-    catch(e){ await this.call('write', {deviceId: dev.id, service: SVC, characteristic: TX, value}); }
+    const opts = {deviceId: dev.id, service: SVC, characteristic: TX, value};
+    if (this.wwr !== false){
+      try{ await this.call('writeWithoutResponse', opts); this.wwr = true; return; }
+      catch(e){ if (this.wwr === true) throw e; this.wwr = false; }
+    }
+    await this.call('write', opts);
   },
   async close(dev){ await this.call('disconnect', {deviceId: dev.id}); if (dev.connected){ dev.connected = false; onDisconnected(); } },
 };
@@ -686,9 +699,11 @@ async function setupGatt(){
   await BT.open(device);
   device.connected = true;
   buf = [];
-  await send(HANDSHAKE); await sleep(300);
-  clearInterval(timer); timer = setInterval(rotation, 2000); rotation();
+  lastFrameAt = Date.now(); busy = false; tick = 0;
+  await send(HANDSHAKE); if (!NATIVE) await sleep(300);    // écran éteint, une attente peut durer une minute
+  rotation();
   manualDisconnect = false; autoInfo = '';
+  if (lostAt) onBikeBack();
   lsSet('fiido_lastdev', {id: device.id, name: device.name});     // pour la connexion automatique
   setConn('ok'); log('Connecté à ' + device.name + (NATIVE ? ' (application)' : ''));
   renderRide();
@@ -697,16 +712,61 @@ async function setupGatt(){
 $('btnDisconnect').onclick = async () => { manualDisconnect = true; if (connected()) try{ await BT.close(device); }catch(e){ log('Déconnexion : ' + e.message); } };
 
 async function onDisconnected(){
-  clearInterval(timer); timer=null; buf=[];
+  buf=[]; busy=false;
   log('Déconnecté');
   if (trip && !manualDisconnect){
+    if (!lostAt){ lostAt = Date.now(); lostNotified = false; tripEvent('lost'); }
     setConn('lost');
-    for (let i=1; i<=20 && trip && !connected(); i++){
-      await sleep(3000);
-      try{ await setupGatt(); return; }catch(e){ log(`Reconnexion échouée (${i}/20) : ` + (e.message || e)); setConn('lost'); }
-    }
+    reconnect();
   } else setConn('off');
   renderRide();
+}
+// Reconnexion pendant un trajet. Pas d'attente (sleep) : écran éteint, elle serait ralentie par Android.
+// Elle est relancée à chaque position GPS (une par seconde, même écran éteint) et toutes les 2 s écran allumé.
+async function reconnect(){
+  if (!trip || manualDisconnect || connected() || connecting || !device) return;
+  if (Date.now() - lastReconnTry < 4000) return;
+  lastReconnTry = Date.now(); connecting = true;
+  try{ await setupGatt(); log('Reconnecté au vélo'); }
+  catch(e){
+    log('Reconnexion échouée : ' + (e.message || e)); setConn('lost');
+    if (NATIVE) try{ await Native.call('disconnect', {deviceId: device.id}); }catch(_){}
+  }
+  connecting = false;
+}
+// Vélo connecté mais muet (plus aucune réponse) : on coupe et on reconnecte
+async function forceReconnect(){
+  log('Le vélo ne répond plus : reconnexion');
+  lastReconnTry = Date.now();
+  device.connected = false;
+  try{ await BT.close(device); }catch(e){}
+  onDisconnected();
+}
+function heartbeat(){
+  if (!trip){ if (connected() && Date.now() - lastPoll > 1900) rotation(); return; }
+  if (connected()){
+    if (Date.now() - lastFrameAt > 15000 && Date.now() - lastReconnTry > 15000) forceReconnect();
+    else if (Date.now() - lastPoll > 1900) rotation();
+  } else { reconnect(); lostAlert(); }
+}
+setInterval(heartbeat, 2000);
+function tripEvent(type){ if (trip) (trip.events ??= []).push({t: Date.now(), type}); }
+// Alerte après 20 s sans vélo : vibration et notification (visible écran éteint)
+function lostAlert(){
+  if (!lostAt || lostNotified || Date.now() - lostAt < 20000) return;
+  lostNotified = true; vibrate([300, 150, 300]);
+  if (NATIVE) Cap.nativePromise('LocalNotifications', 'schedule', {notifications: [{id: 42, title: 'Vélo déconnecté',
+    body: 'Fiido Explorer essaie de se reconnecter. Le trajet continue avec le GPS.'}]}).catch(e => log('Notification : ' + (e.message || e)));
+}
+function clearLost(){
+  if (lostNotified && NATIVE) Cap.nativePromise('LocalNotifications', 'cancel', {notifications: [{id: 42}]}).catch(() => {});
+  lostAt = null; lostNotified = false;
+}
+function onBikeBack(){
+  const s = Math.round((Date.now() - lostAt) / 1000);
+  tripEvent('back'); log(`Vélo retrouvé après ${fmtGap(s)}`);
+  if (lostNotified) vibrate(120);
+  clearLost();
 }
 
 // Connexion automatique : à l'ouverture, puis toutes les 20 s tant que l'app est visible.
@@ -747,7 +807,7 @@ async function rotation(){
   if (!connected()) return;
   if (busy && Date.now() - lastPoll < 6000) return;
   busy = true; const mine = lastPoll = Date.now();
-  try{ for (const f of ROTATION){ await send(f); if (!NATIVE) await sleep(150); } }
+  try{ for (const f of framesFor(tick++)){ await send(f); if (!NATIVE) await sleep(150); } }
   catch(e){ log('Erreur envoi : ' + (e.message || e)); }
   if (lastPoll === mine) busy = false;
 }
@@ -769,6 +829,7 @@ const be32 = (p,o) => p[o]*16777216 + (p[o+1]<<16) + (p[o+2]<<8) + p[o+3];
 
 function handle(f){
   const addr = f[4], p = f.slice(5,-1);
+  lastFrameAt = Date.now();
   const name = NAMES[addr] || ('0x'+addr.toString(16));
   rawFrames[name] = hex(p);
   $('raw').textContent = Object.entries(rawFrames).map(([k,v])=>`${k}\n${v}`).join('\n\n');
@@ -783,7 +844,7 @@ function handle(f){
     const g = p[0x26-5];
     show('gear',  GEARS3[g] ?? ('niveau '+g));
     const flags = p[0x27-5];
-    show('motor', (flags & 0x80) ? 'Allumé' : 'Éteint');
+    show('motor', (flags & 0x80) ? 'Assiste' : 'En pause');
     show('light', (flags & 0x08) ? 'Allumé' : 'Éteint');
     show('limit', (flags & 0x20) ? 'Actif' : 'Inactif');
     logSoc();
@@ -834,8 +895,9 @@ async function startGps(){
       if (!loc) return;
       onFix({timestamp: loc.time || Date.now(), coords: {latitude: loc.latitude, longitude: loc.longitude,
         accuracy: loc.accuracy ?? 99, altitude: loc.altitude, speed: loc.speed}});
-      // écran éteint, les minuteries de la page ralentissent : chaque position GPS relance la lecture du vélo
-      if (Date.now() - lastPoll > 1900) rotation();
+      // écran éteint, les minuteries de la page ralentissent : chaque position GPS relance la lecture
+      // du vélo, la reconnexion et la surveillance
+      heartbeat();
     });
     return;
   }
@@ -914,6 +976,7 @@ document.addEventListener('visibilitychange', () => {
 // ================= Vélos =================
 let bikes = lsGet('fiido_bikes', []);        // [{id, name, lastOdo, updatedAt}]
 let devMap = lsGet('fiido_devmap', {});      // identifiant Bluetooth (propre à cet appareil) -> vélo
+let bikesDel = lsGet('fiido_bikes_del', []), delBike = null;   // vélos supprimés [{id, deleted:true, into, updatedAt}], partagés via GitHub
 let currentBike = null, picking = false;
 const bikeById = id => bikes.find(b => b.id === id);
 const bikeName = id => bikeById(id)?.name || 'Vélo non identifié';
@@ -988,8 +1051,14 @@ function onOdo(odo){
   if (b && odo != null && b.lastOdo !== odo){ b.lastOdo = odo; lsSet('fiido_bikes', bikes); }
 }
 
-function showBikePicker(odo){
+function showBikePicker(odo, synced=false){
   picking = true;
+  // premier lancement sur cet appareil : on récupère d'abord les vélos déjà enregistrés sur GitHub
+  if (!synced && !bikes.length && configured() && navigator.onLine){
+    $('bikePicker').innerHTML = '<div class="muted sm">Récupération de tes vélos…</div>'; $('bikePicker').style.display = 'block';
+    syncBikes().catch(e => log('Vélos : ' + e.message)).finally(() => { if (picking && !currentBike) showBikePicker(num(state.total) ?? odo, true); });
+    return;
+  }
   let sug = null, gap = Infinity;   // vélo connu dont le compteur est juste en dessous (30 km d'écart au plus)
   for (const b of bikes)
     if (b.lastOdo != null && odo != null && odo >= b.lastOdo - 0.1 && odo - b.lastOdo <= 30 && odo - b.lastOdo < gap){ gap = odo - b.lastOdo; sug = b; }
@@ -1011,6 +1080,9 @@ $('bikePicker').onclick = async e => {
     const name = $('newBikeName').value.trim();
     if (!name){ $('newBikeName').focus(); return; }
     const first = bikes.length === 0;
+    const odo = num(state.total);
+    const same = bikes.find(x => x.lastOdo != null && odo != null && odo >= x.lastOdo - 0.1 && odo - x.lastOdo <= 30);
+    if (same && !confirm(`Le compteur de ce vélo (${fr(odo)} km) correspond à « ${same.name} ». Créer quand même un nouveau vélo ?\n\nAnnuler = choisir « ${same.name} ».`)) return selectBike(same.id, true);
     const bike = { id: 'b' + Date.now().toString(36), name, lastOdo: num(state.total), updatedAt: Date.now() };
     bikes.push(bike); storeBikes();
     if (first){   // les trajets enregistrés avant la gestion des vélos sont rattachés au premier vélo
@@ -1026,6 +1098,47 @@ function selectBike(id, remember=false){
   currentBike = id; picking = false;
   if (remember && device){ devMap[device.id] = id; lsSet('fiido_devmap', devMap); }
   hidePicker(); renderConn(); renderRide();
+}
+
+// Suppression d'un vélo : ses trajets sont rattachés à un autre vélo, laissés sans vélo, ou supprimés
+async function applyBikeDeletions(){
+  if (!bikesDel.length) return;
+  const del = new Map(bikesDel.map(d => [d.id, d]));
+  let n = 0;
+  for (const t of await dbAll()){
+    const d = t.bikeId && del.get(t.bikeId); if (!d) continue;
+    const into = d.into && !del.has(d.into) ? d.into : null;
+    if (into) t.bikeId = into; else delete t.bikeId;
+    t.synced = false; await dbPut(t); n++;
+  }
+  for (const [k, v] of Object.entries(devMap)) if (del.has(v)){ const into = del.get(v).into; if (into && !del.has(into)) devMap[k] = into; else delete devMap[k]; }
+  lsSet('fiido_devmap', devMap);
+  if (currentBike && del.has(currentBike)){ const into = del.get(currentBike).into; currentBike = into && bikeById(into) ? into : null; }
+  if (del.has(getFilter())) setFilter('');
+  if (n) invalidateTrips();
+}
+async function deleteBike(id, mode, into){
+  const b = bikeById(id); if (!b) return;
+  if (trip && currentBike === id){ alert('Impossible de supprimer le vélo du trajet en cours.'); return; }
+  const list = tripsCache.filter(t => t.bikeId === id);
+  if (mode === 'delete')
+    for (const t of list) if (!(await deleteTrip(t))) return;        // échec GitHub : on s'arrête là
+  const target = mode === 'move' ? bikeById(into) : null;
+  if (target){   // le journal de batterie et les recharges suivent les trajets
+    const log = new Map(); for (const e of [...(target.socLog||[]), ...(b.socLog||[])]) log.set(e.t, e);
+    target.socLog = [...log.values()].sort((x,y) => x.t - y.t).slice(-2000);
+    const ch = new Map(); for (const c of [...(target.charges||[]), ...(b.charges||[])]) ch.set(c.id, c);
+    target.charges = [...ch.values()].sort((x,y) => x.t - y.t);
+    target.chargesDeleted = [...new Set([...(target.chargesDeleted||[]), ...(b.chargesDeleted||[])])];
+    if (b.lastOdo != null && (target.lastOdo == null || b.lastOdo > target.lastOdo)) target.lastOdo = b.lastOdo;
+    target.updatedAt = Date.now();
+  }
+  bikes = bikes.filter(x => x.id !== id);
+  bikesDel.push({id, name: b.name, deleted: true, into: target ? target.id : null, updatedAt: Date.now()});
+  lsSet('fiido_bikes_del', bikesDel);
+  await applyBikeDeletions();
+  delBike = null; storeBikes(); renderRide(); invalidateTrips();
+  syncAll();
 }
 
 function renameBike(id){
@@ -1125,6 +1238,7 @@ async function stopTrip(){
   clearInterval(tripClock); stopGps();
   try{ wakeLock && wakeLock.release(); }catch(e){}
   const t = trip; trip = null; cockpitOpen = false;
+  if (lostAt) clearLost();
   if (nav) navEnd();
   finalize(t, Date.now(), num(state.soc), num(state.total));
   await dbPut(t);
@@ -1181,7 +1295,9 @@ function updateCockpit(){
   if (!trip) return;
   const s = summarize(trip, Date.now(), num(state.soc), num(state.total));
   const soc = num(state.soc);
-  $('cSpeed').textContent = connected() && state.speed != null ? fr(num(state.speed)) : '—';
+  $('cSpeed').textContent = connected() && state.speed != null ? fr(num(state.speed))
+    : fix && fix.gspeed != null && Date.now() - fix.t < 5000 ? fr(fix.gspeed * 3.6) : '—';
+  if (connState === 'lost' && lostAt) $('cConn').lastElementChild.textContent = 'Vélo perdu · ' + fmtGap(Math.round((Date.now() - lostAt)/1000));
   $('cRec').textContent = '● ' + fmtDur(s.dur);
   $('cDist').textContent = fr(s.dist);
   $('cAvg').textContent = s.dur > 30 ? fr(s.avg) : '—';
@@ -1325,11 +1441,15 @@ async function syncBikes(){
   if (r.ok){ const j = await r.json(); sha = j.sha; try{ remote = JSON.parse(fromB64(j.content)); }catch(e){} }
   else if (r.status !== 404) throw new Error(ghError(r));
   const m = new Map(remote.map(b => [b.id, b]));
-  for (const b of bikes) m.set(b.id, mergeBike(b, m.get(b.id)));
+  for (const b of bikes) if (!m.get(b.id)?.deleted) m.set(b.id, mergeBike(b, m.get(b.id)));
+  for (const d of bikesDel) m.set(d.id, d);              // une suppression l'emporte toujours
   const byId = (a,b) => a.id < b.id ? -1 : 1;
   const merged = [...m.values()].sort(byId);
   const changed = JSON.stringify(merged) !== JSON.stringify([...remote].sort(byId));
-  bikes = merged; storeBikes();
+  bikes = merged.filter(b => !b.deleted);
+  bikesDel = merged.filter(b => b.deleted); lsSet('fiido_bikes_del', bikesDel);
+  await applyBikeDeletions();
+  storeBikes();
   if (changed){
     const p = await gh('/contents/bikes.json', {method:'PUT', body:{ message:'Mise à jour des vélos',
       content: toB64(JSON.stringify(merged, null, 1)), ...(sha ? {sha} : {}) }});
@@ -1513,20 +1633,55 @@ $('dDel').onclick = async () => {
   if (await deleteTrip(t)) $('btnBack').click();
 };
 
+// Temps passé à rouler entre deux instants, d'après les points GPS (plus de 3 km/h)
+function gpsMoving(pts, from, to){
+  let s = 0;
+  for (let i = 1; i < pts.length; i++){
+    const a = pts[i-1], b = pts[i];
+    if (b.t <= from || a.t >= to) continue;
+    const dt = (Math.min(b.t, to) - Math.max(a.t, from)) / 1000, full = (b.t - a.t) / 1000;
+    if (full <= 0 || full > 30) continue;
+    if (haversine(a, b) / full * 3.6 > 3) s += dt;
+  }
+  return s;
+}
+// Vitesse calculée à partir des points GPS, un échantillon toutes les 10 s (lisse le bruit du GPS)
+function gpsSpeeds(pts){
+  const out = []; let a = null, acc = 0;
+  for (let i = 0; i < pts.length; i++){
+    const p = pts[i];
+    if (!a){ a = p; acc = 0; continue; }
+    const step = p.t - pts[i-1].t;
+    if (step > 30000){ a = p; acc = 0; continue; }
+    acc += haversine(pts[i-1], p);
+    if (p.t - a.t >= 10000){ out.push({t: (a.t + p.t) / 2, v: acc / ((p.t - a.t) / 1000) * 3.6}); a = p; acc = 0; }
+  }
+  return out;
+}
 function tripDetails(t){
   const rows = (t.rows || []).map(r => ({ t:Date.parse(r[0]), speed:num(r[1]), soc:num(r[2]), odo:num(r[4]), gear:r[5]||null,
     temp:num(r[8]), ele:num(r[14]) })).filter(r => !isNaN(r.t));
   let moving = 0; const modes = {}, gaps = [];
+  const pts = t.points || [], end = t.end || (rows.length ? rows[rows.length-1].t : t.start);
+  // pendant un trou, le temps en mouvement vient du GPS ; à défaut, du compteur du vélo
+  const gapMoving = (a, b) => {
+    if (pts.some(p => p.t > a.t && p.t < b.t)) return gpsMoving(pts, a.t, b.t);
+    return (a.odo != null && b.odo != null && b.odo - a.odo >= 0.1) ? (b.t - a.t) / 1000 : 0;
+  };
+  if (rows.length && rows[0].t - t.start > 20000){ gaps.push({from: t.start, to: rows[0].t}); moving += gpsMoving(pts, t.start, rows[0].t); }
+  if (!rows.length && end - t.start > 20000){ gaps.push({from: t.start, to: end}); moving += gpsMoving(pts, t.start, end); }
   for (let i = 1; i < rows.length; i++){
     if (rows[i].t - rows[i-1].t > 20000){
       gaps.push({from: rows[i-1].t, to: rows[i].t});
-      // le compteur a avancé pendant le trou : on y roulait, on compte ce temps comme du temps en mouvement
-      if (rows[i].odo != null && rows[i-1].odo != null && rows[i].odo - rows[i-1].odo >= 0.1) moving += (rows[i].t - rows[i-1].t) / 1000;
+      moving += gapMoving(rows[i-1], rows[i]);
       continue;
     }
     const dt = Math.min(rows[i].t - rows[i-1].t, 10000) / 1000;
     if (rows[i].speed > 1){ moving += dt; if (rows[i].gear) modes[rows[i].gear] = (modes[rows[i].gear]||0) + dt; }
   }
+  if (rows.length && end - rows[rows.length-1].t > 20000){ gaps.push({from: rows[rows.length-1].t, to: end}); moving += gpsMoving(pts, rows[rows.length-1].t, end); }
+  const gapMs = gaps.reduce((a, g) => a + g.to - g.from, 0);
+  const coverage = end - t.start > 0 ? Math.max(0, 1 - gapMs / (end - t.start)) : null;
   let gain = 0, ref = null;     // dénivelé positif, seuil de 3 m contre le bruit du GPS
   for (const e of (t.points||[]).map(p => p.ele).filter(e => e != null)){
     if (ref == null) ref = e;
@@ -1535,7 +1690,7 @@ function tripDetails(t){
   }
   const socs = rows.map(r => r.soc).filter(v => v != null);
   const temps = rows.map(r => r.temp).filter(v => v != null);
-  return { rows, moving, modes, gaps, gain: (t.points||[]).some(p => p.ele != null) ? gain : null,
+  return { rows, moving, modes, gaps, coverage, gain: (t.points||[]).some(p => p.ele != null) ? gain : null,
     socStart: t.socStart ?? socs[0] ?? null, socEnd: socs.length ? socs[socs.length-1] : null,
     tempMax: temps.length ? Math.max(...temps) : null };
 }
@@ -1579,16 +1734,27 @@ function renderDetail(t){
     return `<div style="width:${pct}%;background:${MODE_COLORS[m]||'#9AA6B0'}">${pct >= 14 ? esc(m) : ''}</div>`; }).join('');
   $('dModesTxt').textContent = entries.map(([m,sec]) => `${m} ${Math.round(sec/60)} min`).join(' · ');
   const gapSec = Math.round(D.gaps.reduce((a,g) => a + (g.to - g.from), 0) / 1000);
-  $('dGaps').innerHTML = gapSec ? `<div class="banner info" style="font-size:13px"><span>⚠ ${fmtGap(gapSec)} non enregistrées (app en arrière-plan ou connexion perdue)${D.gaps.length > 1 ? `, en ${D.gaps.length} fois` : ''}. La distance reste juste : elle vient du compteur du vélo.</span></div>` : '';
+  const cov = D.coverage != null ? Math.round(100 * D.coverage) : null;
+  const losses = (t.events || []).filter(e => e.type === 'lost').length;
+  const src = s.bike != null && s.bike > 0.5 ? 'du compteur du vélo' : 'du GPS';
+  $('dGaps').innerHTML = gapSec >= 20
+    ? `<div class="banner info" style="font-size:13px"><span>⚠ Données du vélo reçues sur ${cov} % du trajet : ${fmtGap(gapSec)} manquantes${D.gaps.length > 1 ? `, en ${D.gaps.length} fois` : ''}${losses ? ` (connexion perdue ${losses} fois)` : ''}. La distance vient ${src} ; la vitesse manquante est complétée par le GPS (courbe grise).</span></div>`
+    : cov != null && D.rows.length ? `<div class="muted xs" style="margin:-4px 0 8px">✓ Données du vélo reçues sur ${cov} % du trajet</div>` : '';
   renderDetailMap(t);
   const step = Math.max(1, Math.ceil(D.rows.length/1500));
   const sampled = D.rows.filter((_, i) => i % step === 0);
+  // pendant les trous, la vitesse est complétée par le GPS (série grise)
+  const inGap = x => D.gaps.some(g => x > g.from && x < g.to);
+  const fill = D.gaps.length ? gpsSpeeds(t.points || []).filter(g => inGap(g.t)).map(g => ({t: g.t, speed:null, gps: g.v, soc:null, ele:null})) : [];
+  const all = [...sampled, ...fill].sort((a, b) => a.t - b.t);
+  // relie la courbe grise aux mesures du vélo qui l'encadrent
+  all.forEach((r, i) => { if (r.gps == null && r.speed != null && (all[i-1]?.gps != null || all[i+1]?.gps != null)) r.gps = r.speed; });
   dRows = [];
-  sampled.forEach((r, i) => {          // un point vide coupe la courbe là où il manque des mesures
-    if (i && r.t - sampled[i-1].t > 20000 * step) dRows.push({t: (r.t + sampled[i-1].t)/2, speed:null, soc:null, ele:null, gap:true});
+  all.forEach((r, i) => {          // un point vide coupe la courbe là où il manque des mesures
+    if (i && r.t - all[i-1].t > 20000 * step) dRows.push({t: (r.t + all[i-1].t)/2, speed:null, gps:null, soc:null, ele:null, gap:true});
     dRows.push(r);
   });
-  const avail = [['speed','Vitesse'],['soc','Batterie'],['ele','Altitude']].filter(([k]) => dRows.some(r => r[k] != null));
+  const avail = [['speed','Vitesse'],['soc','Batterie'],['ele','Altitude']].filter(([k]) => dRows.some(r => r[k] != null || (k === 'speed' && r.gps != null)));
   if (!avail.some(([k]) => k === dKey)) dKey = avail[0]?.[0] || 'speed';
   if (!cfgsKeys.includes(dKey)) dKey = 'speed';
   $('dTabs').innerHTML = avail.map(([k,l]) => `<button data-k="${k}" class="${k===dKey?'on':''}">${l}</button>`).join('');
@@ -1659,14 +1825,16 @@ function drawDetailChart(){
   Chart.defaults.color = '#9AA6B0'; Chart.defaults.font.family = 'Inter, system-ui, sans-serif';
   dChart = new Chart($('dChart'), {
     type:'line',
-    data:{ labels, datasets:[{ data: dRows.map(r => r[dKey]), borderColor:color, backgroundColor:color+'2E', fill, borderWidth:2,
-      pointRadius:0, pointHoverRadius:4, tension:.2, spanGaps:false }]},
+    data:{ labels, datasets:[{ label:'Vélo', data: dRows.map(r => r[dKey]), borderColor:color, backgroundColor:color+'2E', fill, borderWidth:2,
+      pointRadius:0, pointHoverRadius:4, tension:.2, spanGaps:false },
+      ...(dKey === 'speed' && dRows.some(r => r.gps != null) ? [{ label:'GPS (vélo non reçu)', data: dRows.map(r => r.gps ?? null),
+        borderColor:'#9AA6B0', borderDash:[5,4], borderWidth:2, pointRadius:0, pointHoverRadius:4, tension:.2, spanGaps:false, fill:false }] : [])]},
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
       interaction:{mode:'index', intersect:false},
       onHover:(e, els) => { if (els.length) highlight(els[0].index); },
       plugins:{ legend:{display:false}, tooltip:{ callbacks:{
         title: items => 'à ' + items[0].label,
-        label: c => c.parsed.y == null ? '' : `${fr(c.parsed.y, digits)} ${unit}` }}},
+        label: c => c.parsed.y == null || (c.datasetIndex === 1 && c.chart.data.datasets[0].data[c.dataIndex] != null) ? '' : `${c.datasetIndex ? 'GPS : ' : ''}${fr(c.parsed.y, digits)} ${unit}` }}},
       scales:{ x:{ grid:{display:false}, ticks:{maxTicksLimit:5, maxRotation:0} },
                y:{ grid:{color:'#263038'}, ...(unit==='%' ? {min:0, max:100} : {}), ...(unit==='km/h' ? {beginAtZero:true} : {}) } } }
   });
@@ -1947,14 +2115,34 @@ function renderSettings(){
   renderFavSettings();
   $('bikeList').innerHTML = bikes.length ? bikes.map(b => {
     const n = tripsCache.filter(t => t.bikeId === b.id).length;
+    const others = bikes.filter(x => x.id !== b.id);
+    const panel = delBike === b.id ? `<div class="card" style="margin:0 0 8px;display:flex;flex-direction:column;gap:10px;border-color:#4A2326">
+        <b class="sm">Supprimer « ${esc(b.name)} » ?</b>
+        ${n ? `<label class="sm" for="delMode">Que faire de ${n > 1 ? `ses ${n} trajets` : 'son trajet'} ?</label>
+        <select id="delMode">${others.map(x => `<option value="move:${esc(x.id)}">Les rattacher à « ${esc(x.name)} »</option>`).join('')}
+          <option value="none">Les garder sans vélo (« Vélo non identifié »)</option>
+          <option value="delete">Les supprimer aussi${configured() ? ' (aussi sur GitHub)' : ''}</option></select>` : '<div class="muted xs">Aucun trajet n\'est rattaché à ce vélo.</div>'}
+        ${others.length ? '<div class="muted xs">En rattachant les trajets, le journal de batterie et les recharges suivent aussi.</div>' : ''}
+        <div class="row" style="gap:8px;justify-content:flex-end"><button class="btn" data-delcancel="1">Annuler</button><button class="btn danger" data-delok="${esc(b.id)}">Supprimer</button></div></div>` : '';
     return `<div class="bikerow"><div><b>${esc(b.name)}</b><div class="muted xs">${n} trajet${n>1?'s':''} · compteur ${fr(b.lastOdo)} km</div></div>
-      <button class="btn" data-rename="${esc(b.id)}">Renommer</button></div>`;
+      <div class="row" style="gap:4px"><button class="btn" data-rename="${esc(b.id)}">Renommer</button><button class="btn danger" data-delbike="${esc(b.id)}" aria-label="Supprimer ${esc(b.name)}">✕</button></div></div>${panel}`;
   }).join('') : '<div class="muted sm">Aucun vélo pour l\'instant. Connectez-vous à un vélo depuis l\'onglet Rouler pour l\'ajouter.</div>';
   $('goal').value = lsGet('fiido_goal', '') || '';
   setStatus('syncStatus', syncInfo.text, syncInfo.state==='ok'?'ok':syncInfo.state==='err'?'err':'');
   if (!configured()) $('syncCfg').open = true;
 }
-$('bikeList').onclick = e => { const b = e.target.closest('button[data-rename]'); if (b) renameBike(b.dataset.rename); };
+$('bikeList').onclick = async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.rename) return renameBike(b.dataset.rename);
+  if (b.dataset.delbike){ delBike = delBike === b.dataset.delbike ? null : b.dataset.delbike; return renderSettings(); }
+  if (b.dataset.delcancel){ delBike = null; return renderSettings(); }
+  if (b.dataset.delok){
+    const v = $('delMode') ? $('delMode').value : 'none';
+    if (v === 'delete' && !confirm('Supprimer définitivement ce vélo et tous ses trajets ?')) return;
+    b.disabled = true;
+    await deleteBike(b.dataset.delok, v.startsWith('move:') ? 'move' : v, v.startsWith('move:') ? v.slice(5) : null);
+  }
+};
 $('goal').onchange = () => { const v = num($('goal').value); lsSet('fiido_goal', v && v > 0 ? v : ''); };
 
 // ================= Guidage GPS =================
@@ -2369,7 +2557,7 @@ function download(name, content, type){
   a.download = name; a.click();
 }
 function exportCsv(t){
-  const head = ['horodatage','vitesse_kmh','batterie_pct','trajet_km','total_km','assistance','systeme','eclairage',
+  const head = ['horodatage','vitesse_kmh','batterie_pct','trajet_km','total_km','assistance','moteur','eclairage',
     'temp_moteur_c','couple_brut','cadence_brut','latitude','longitude','precision_gps_m','altitude_m','vitesse_gps_kmh','stats_brut'];
   const csv = [head, ...t.rows].map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(';')).join('\n');
   download(`fiido-${stamp(t)}.csv`, '﻿'+csv, 'text/csv');

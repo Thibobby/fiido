@@ -175,6 +175,12 @@ body.cockpit .tabbar{display:none}
 .res .t{font-weight:600}.res .s{font-size:12px;color:var(--muted)}
 .pmap{position:relative;height:240px;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#12171A}
 #pMap{position:absolute;inset:0}
+.pkmap{position:relative;height:min(52vh,440px);border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#12171A}
+#pkMap{position:absolute;inset:0}
+.pkpin{position:absolute;left:50%;top:50%;transform:translate(-50%,-100%);pointer-events:none;z-index:500;filter:drop-shadow(0 2px 4px rgba(0,0,0,.6))}
+.pkdot{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:#0B0E10;pointer-events:none;z-index:500}
+.pkme{position:absolute;right:10px;bottom:10px;z-index:500}
+#navPick:not([hidden]){display:flex;flex-direction:column;gap:10px}
 #navPreview:not([hidden]){display:flex;flex-direction:column;gap:12px}
 .navbar{display:none;align-items:center;gap:12px;background:#0F2421;border:1px solid var(--accent);border-radius:16px;padding:10px 12px}
 .navbar.on{display:flex}
@@ -482,12 +488,22 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
       <button class="iconbtn" id="navClose" aria-label="Fermer"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
     <label for="navQ" style="margin:0">Adresse ou lieu</label>
     <input id="navQ" type="text" placeholder="ex. boulangerie, Décathlon, 12 rue de la République" autocomplete="off" enterkeyhint="search">
+    <button class="btn" id="navPickBtn" style="align-self:flex-start"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px"><path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>Choisir sur la carte</button>
     <div class="favs" id="sheetFavs"></div>
     <div id="navResults"></div>
+    <div id="navPick" hidden>
+      <div class="muted xs">Déplace la carte pour placer l'épingle sur ta destination (ou touche un endroit).</div>
+      <div class="pkmap dark-tiles"><div id="pkMap"></div>
+        <svg class="pkpin" aria-hidden="true" width="36" height="44" viewBox="0 0 24 30"><path d="M12 29s10-9.2 10-17A10 10 0 0 0 2 12c0 7.8 10 17 10 17z" fill="#EF4444" stroke="#0B0E10" stroke-width="1.5"/><circle cx="12" cy="12" r="3.6" fill="#0B0E10"/></svg>
+        <div class="pkdot"></div>
+        <button class="iconbtn pkme" id="pkMe" aria-label="Revenir à ma position"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button></div>
+      <div id="pkInfo" class="sm" style="min-height:40px"></div>
+      <div class="row" style="gap:8px;justify-content:flex-end"><button class="btn" id="pkCancel">Annuler</button><button class="btn primary" id="pkGo" disabled>Aller ici</button></div>
+    </div>
     <div id="navPreview" hidden>
       <div class="pmap dark-tiles"><div id="pMap"></div></div>
       <div id="navSummary"></div>
-      <div class="row wrap"><button class="btn primary" id="navGo">Démarrer le guidage</button><button class="btn" id="navFav">Ajouter aux favoris</button></div>
+      <div class="row wrap"><button class="btn primary" id="navGo">Démarrer le guidage</button><button class="btn" id="navFav">Ajouter aux favoris</button><button class="btn" id="navAdjust">Ajuster sur la carte</button></div>
       <div class="muted xs" id="navGoHint"></div>
     </div>
     <div class="muted xs" id="navAttrib">Recherche : IGN Géoplateforme, Photon (OpenStreetMap) · Itinéraires : OpenStreetMap</div>
@@ -503,8 +519,8 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.12.2 bêta';
-const APP_DATE = '8 novembre 2026';
+const APP_VERSION = '0.13 bêta';
+const APP_DATE = '22 novembre 2026';
 
 const $ = id => document.getElementById(id);
 $('verChip').textContent = 'v' + APP_VERSION;
@@ -940,6 +956,8 @@ function ensureMap(){
   line = L.polyline([], {color:'#2DD4BF', weight:5}).addTo(map);
   marker = L.circleMarker([0,0], {radius:8, color:'#fff', weight:3, fillColor:'#60A5FA', fillOpacity:1});
   map.on('dragstart', () => { follow=false; });
+  // appui long (ou clic droit) sur la carte : choisir ce point comme destination
+  map.on('contextmenu', e => { vibrate(30); openNavSheet(); openPick({lat: e.latlng.lat, lon: e.latlng.lng}); });
   map.setView([45.76, 4.84], 13);
   return true;
 }
@@ -2296,7 +2314,7 @@ function rememberPos(f){ if (!lastPos || Date.now() - (lastPos.t || 0) > 60000){
 // ---- Fenêtre « Destination »
 function openNavSheet(){
   $('navSheet').classList.add('on'); document.body.style.overflow = 'hidden';
-  $('navQ').value = ''; $('navResults').innerHTML = ''; $('navPreview').hidden = true; plan = null;
+  $('navQ').value = ''; $('navResults').innerHTML = ''; $('navPreview').hidden = true; plan = null; closePick();
   renderFavs(); setTimeout(() => $('navQ').focus(), 50);
 }
 function closeNavSheet(){ $('navSheet').classList.remove('on'); document.body.style.overflow = ''; }
@@ -2306,7 +2324,7 @@ $('btnNavCockpit').onclick = () => nav ? (confirm('Arrêter le guidage en cours 
 $('navStop').onclick = () => { if (confirm('Arrêter le guidage ? Le trajet continue d’être enregistré.')) navEnd(); };
 
 $('navQ').oninput = () => {
-  clearTimeout(searchTimer);
+  clearTimeout(searchTimer); closePick();
   const q = $('navQ').value.trim();
   if (q.length < 3){ $('navResults').innerHTML = ''; return; }
   searchTimer = setTimeout(async () => {
@@ -2326,6 +2344,7 @@ $('navQ').oninput = () => {
 
 async function planTo(dest){
   if (!$('navSheet').classList.contains('on')) openNavSheet();
+  closePick();
   $('navResults').innerHTML = ''; $('navQ').value = dest.name;
   $('navPreview').hidden = false;
   $('navSummary').innerHTML = `<div class="muted sm">Calcul de l'itinéraire vers <b style="color:var(--ink)">${esc(dest.name)}</b>…</div>`;
@@ -2373,12 +2392,70 @@ $('navGo').onclick = () => {
 };
 $('navFav').onclick = () => {
   if (!plan) return;
-  const name = prompt('Nom de ce lieu favori (ex. Maison, Travail) :', plan.dest.name);
+  const name = prompt('Nom de ce lieu favori (ex. Maison, Travail) :', plan.dest.picked ? '' : plan.dest.name);
   if (!name || !name.trim()) return;
   places.push({id: 'p' + Date.now().toString(36), name: name.trim().slice(0, 30), sub: plan.dest.sub || plan.dest.name,
     lat: plan.dest.lat, lon: plan.dest.lon, updatedAt: Date.now()});
   storePlaces(); $('navFav').style.display = 'none'; syncAll();
 };
+
+// ---- Choisir la destination sur la carte (épingle fixe au centre, on déplace la carte)
+let pkmap = null, pkMe = null, pkSeq = 0, pkTimer = null, pkDest = null;
+function openPick(center){
+  if (!window.L){ alert('La carte n’est pas disponible (connexion internet nécessaire).'); return; }
+  $('navResults').innerHTML = ''; $('navPreview').hidden = true; $('sheetFavs').style.display = 'none';
+  $('navPickBtn').style.display = 'none'; $('navPick').hidden = false; plan = null;
+  const me = fix || lastPos;
+  if (!pkmap){
+    pkmap = L.map('pkMap', {zoomControl:false, attributionControl:false});
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(pkmap);
+    pkMe = L.circleMarker([0,0], {radius:7, color:'#fff', weight:3, fillColor:'#60A5FA', fillOpacity:1});
+    pkmap.on('click', e => pkmap.panTo(e.latlng));
+    pkmap.on('movestart', () => { $('pkGo').disabled = true; pkDest = null; });
+    pkmap.on('moveend', () => { clearTimeout(pkTimer); pkTimer = setTimeout(pickLookup, 350); });
+  }
+  if (me){ pkMe.setLatLng([me.lat, me.lon]); if (!pkmap.hasLayer(pkMe)) pkMe.addTo(pkmap); }
+  const c = center || me || {lat: 45.764, lon: 4.8357};
+  setTimeout(() => { $('navQ').blur(); pkmap.invalidateSize(); pkmap.setView([c.lat, c.lon], center ? 17 : 15); pickLookup(); }, 60);
+}
+function closePick(){
+  if ($('navPick').hidden) return;
+  $('navPick').hidden = true; $('navPickBtn').style.display = ''; $('sheetFavs').style.display = '';
+  clearTimeout(pkTimer); pkSeq++;
+}
+async function pickLookup(){
+  const c = pkmap.getCenter(), seq = ++pkSeq, me = fix || lastPos;
+  const at = {lat: c.lat, lon: c.lng};
+  const dist = me ? ` · à ${fmtNavDist(haversine(me, at))}` : '';
+  $('pkInfo').innerHTML = '<span class="muted">Recherche de l’adresse…</span>';
+  let near = null;
+  try{ near = await reverseGeo(at); }catch(e){}
+  if (seq !== pkSeq) return;
+  pkDest = { name: near ? 'Près de ' + near.name : 'Point choisi sur la carte', sub: near ? near.sub : `${at.lat.toFixed(5)}, ${at.lon.toFixed(5)}`,
+             lat: at.lat, lon: at.lon, poi: true, picked: true };
+  $('pkInfo').innerHTML = `<b>${esc(pkDest.name)}</b><div class="muted xs">${esc(pkDest.sub)}${dist}</div>`;
+  $('pkGo').disabled = false;
+}
+// Adresse la plus proche d'un point : IGN, puis OpenStreetMap (Photon)
+async function reverseGeo(p){
+  try{
+    const r = await fetch(`https://data.geopf.fr/geocodage/reverse?lon=${p.lon.toFixed(6)}&lat=${p.lat.toFixed(6)}&index=address&limit=1`);
+    if (r.ok){
+      const f = ((await r.json()).features || [])[0];
+      if (f && haversine(p, {lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0]}) < 150){ const x = geoItem(f, 'address'); return {name: x.name, sub: x.sub}; }
+    }
+  }catch(e){}
+  const r = await fetch(`https://photon.komoot.io/reverse?lon=${p.lon.toFixed(6)}&lat=${p.lat.toFixed(6)}&lang=fr&limit=1`);
+  if (!r.ok) return null;
+  const q = (((await r.json()).features || [])[0] || {}).properties; if (!q) return null;
+  const name = q.name || [q.housenumber, q.street].filter(Boolean).join(' ');
+  return name ? {name, sub: [q.postcode, q.city].filter(Boolean).join(' ')} : null;
+}
+$('navPickBtn').onclick = () => openPick();
+$('pkCancel').onclick = closePick;
+$('pkMe').onclick = () => { const me = fix || lastPos; if (me && pkmap) pkmap.setView([me.lat, me.lon], Math.max(pkmap.getZoom(), 15)); };
+$('pkGo').onclick = () => { if (pkDest) planTo(pkDest); };
+$('navAdjust').onclick = () => { if (plan) openPick(plan.dest); };
 
 // ---- Favoris
 function favChip(f){ return `<button class="fav" data-fav="${esc(f.id)}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="var(--sport)"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>${esc(f.name)}</button>`; }

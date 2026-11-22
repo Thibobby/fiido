@@ -162,6 +162,17 @@ body.cockpit .tabbar{display:none}
 /* ---------- Réglages ---------- */
 .hbar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}.hbar i{display:block;height:100%;border-radius:4px;background:var(--accent)}
 .chrow{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;border-top:1px solid var(--line);padding-top:6px}
+.wx{display:flex;flex-direction:column;gap:10px}
+.wxnow{display:flex;align-items:center;gap:14px}
+.wxal{display:flex;gap:10px;align-items:flex-start;font-size:14px;line-height:1.4}
+.wxal i{flex:none;width:8px;height:8px;border-radius:50%;margin-top:6px;background:var(--okt)}
+.wxal.warn i{background:var(--warn)}.wxal.bad i{background:var(--bad)}
+.mt{display:flex;flex-direction:column;gap:6px;padding:10px 0;border-top:1px solid var(--line)}
+.mt:first-child{border-top:0;padding-top:0}
+.mt .hbar i.warn{background:var(--warn)}.mt .hbar i.bad{background:var(--bad)}
+.mtedit{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.rng{display:flex;flex-direction:column;gap:4px;margin-top:10px;padding:10px 12px;border-radius:14px;background:var(--s1);border:1px solid var(--line)}
+.rng.warn{border-color:var(--warn)}.rng.bad{border-color:var(--bad)}
 .bikerow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .bikerow:first-child{border-top:none}
 .diag{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:10px}
@@ -251,12 +262,16 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     </button>
     <div class="muted xs" style="text-align:center;margin-top:-6px" id="startHint">Connectez d'abord le vélo.</div>
 
+    <div id="wxCard"></div>
+
     <div class="card" style="display:flex;flex-direction:column;gap:10px">
       <div class="row between"><h3>Itinéraire</h3><span class="muted xs" id="navCardSub"></span></div>
       <div class="favs" id="favRow"></div>
       <button class="btn wide" id="btnNavOpen" style="display:flex;align-items:center;justify-content:center;gap:8px">
         <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>Choisir une destination</button>
     </div>
+
+    <div id="maintCard"></div>
 
     <div id="lastTripBox"></div>
   </section>
@@ -430,6 +445,9 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     <h2>Mes vélos</h2>
     <div class="card" id="bikeList"></div>
 
+    <h2>Entretien</h2>
+    <div class="card" id="maintSettings"></div>
+
     <h2>Synchronisation</h2>
     <div class="card" style="display:flex;flex-direction:column;gap:6px">
       <div class="row between"><span class="status" id="syncStatus">Synchronisation non configurée.</span><button class="btn" id="btnSync">Synchroniser</button></div>
@@ -468,7 +486,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     <div id="appCard"></div>
 
     <h2>Données externes</h2>
-    <div class="card muted sm">La température extérieure de chaque trajet est demandée au service météo gratuit Open-Meteo, en envoyant une position arrondie au kilomètre près. Aucune autre donnée ne quitte l'app, en dehors de ta synchronisation GitHub.</div>
+    <div class="card muted sm">La température de chaque trajet, les prévisions météo et l'altitude des itinéraires sont demandées au service gratuit Open-Meteo, en envoyant une position arrondie au kilomètre près (le tracé de l'itinéraire pour l'altitude). Aucune autre donnée ne quitte l'app, en dehors de ta synchronisation GitHub.</div>
 
     <h2>Diagnostic</h2>
     <details class="card">
@@ -503,6 +521,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     <div id="navPreview" hidden>
       <div class="pmap dark-tiles"><div id="pMap"></div></div>
       <div id="navSummary"></div>
+      <div id="navRange"></div>
       <div class="row wrap"><button class="btn primary" id="navGo">Démarrer le guidage</button><button class="btn" id="navFav">Ajouter aux favoris</button><button class="btn" id="navAdjust">Ajuster sur la carte</button></div>
       <div class="muted xs" id="navGoHint"></div>
     </div>
@@ -519,7 +538,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.13 bêta';
+const APP_VERSION = '0.14 bêta';
 const APP_DATE = '22 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -1207,6 +1226,8 @@ function renderRide(){
   $('startHint').textContent = !connected() ? "Connectez d'abord le vélo." : !currentBike ? 'Identifiez le vélo pour démarrer.' : 'Le GPS démarrera avec le trajet.';
   updateLive();
   renderLastTrip();
+  renderMaintCard();
+  renderWx();
 }
 
 function updateLive(){
@@ -1238,6 +1259,7 @@ let trip=null, tripClock=null;
 $('btnStart').onclick = () => { if (!trip) startTrip(); };
 
 function startTrip(){
+  maintDueAtStart = new Set(maintItems(bikeById(currentBike)).filter(x => maintStatus(x, bikeById(currentBike)).due).map(x => x.id));
   trip = { id:Date.now(), start:Date.now(), rows:[], points:[], gpsDist:0, vmax:0,
            socStart:num(state.soc), odoStart:num(state.total), inProgress:true, appVersion:APP_VERSION, bikeId:currentBike };
   banner('recovered', '');
@@ -1262,6 +1284,7 @@ async function stopTrip(){
   await dbPut(t);
   vibrate([60, 60, 60]);
   try{ await fetchTemp(t); }catch(e){}
+  maintAfterTrip(t);
   banner('gapBanner', '');
   log(`Trajet terminé : ${t.rows.length} mesures, ${t.points.length} points GPS`);
   await loadTrips();
@@ -1486,6 +1509,9 @@ function mergeBike(a, b){
   const ch = new Map(); for (const c of [...(b.charges||[]), ...(a.charges||[])]) ch.set(c.id, c);
   w.charges = [...ch.values()].filter(c => !del.has(c.id)).sort((x,y) => x.t - y.t);
   w.chargesDeleted = [...del];
+  const mt = new Map();
+  for (const x of [...(b.maint||[]), ...(a.maint||[])]){ const o = mt.get(x.id); if (!o || (x.updatedAt||0) >= (o.updatedAt||0)) mt.set(x.id, x); }
+  if (mt.size) w.maint = [...mt.values()];
   return w;
 }
 
@@ -2021,9 +2047,19 @@ function renderStats(){
   renderHealth();
 }
 // Autonomie selon la température extérieure (tous niveaux d'assistance confondus)
+const TEMP_BANDS = [[-99, 5, '< 5 °C', '#60A5FA', 'sous 5 °C'], [5, 10, '5–10 °C', '#7DD3FC', 'entre 5 et 10 °C'], [10, 15, '10–15 °C', '#2DD4BF', 'entre 10 et 15 °C'],
+                    [15, 20, '15–20 °C', '#FCD34D', 'entre 15 et 20 °C'], [20, 99, '≥ 20 °C', '#FB923C', 'au-dessus de 20 °C']];
+// Effet du froid sur la consommation : consommation dans la tranche de température / consommation moyenne
+function tempFactor(temp, list){
+  if (temp == null) return null;
+  const all = modeCons(list, null); if (!all.cons) return null;
+  const b = TEMP_BANDS.find(([lo, hi]) => temp >= lo && temp < hi);
+  const g = list.filter(t => t.weather && t.weather.temp != null && t.weather.temp >= b[0] && t.weather.temp < b[1]);
+  const mc = modeCons(g, null); if (!mc.cons) return null;
+  return {f: Math.min(1.5, Math.max(0.8, mc.cons / all.cons)), phrase: b[4]};
+}
 function renderTempCard(all){
-  const BANDS = [[-99, 5, '< 5 °C', '#60A5FA', 'sous 5 °C'], [5, 10, '5–10 °C', '#7DD3FC', 'entre 5 et 10 °C'], [10, 15, '10–15 °C', '#2DD4BF', 'entre 10 et 15 °C'],
-                 [15, 20, '15–20 °C', '#FCD34D', 'entre 15 et 20 °C'], [20, 99, '≥ 20 °C', '#FB923C', 'au-dessus de 20 °C']];
+  const BANDS = TEMP_BANDS;
   const withT = all.filter(t => t.weather && t.weather.temp != null);
   const rows = BANDS.map(([lo, hi, label, color, phrase]) => {
     const g = withT.filter(t => t.weather.temp >= lo && t.weather.temp < hi), mc = modeCons(g, null);
@@ -2130,6 +2166,7 @@ function renderAppCard(){
 }
 function renderSettings(){
   renderAppCard();
+  renderMaintSettings();
   renderFavSettings();
   $('bikeList').innerHTML = bikes.length ? bikes.map(b => {
     const n = tripsCache.filter(t => t.bikeId === b.id).length;
@@ -2347,6 +2384,7 @@ async function planTo(dest){
   closePick();
   $('navResults').innerHTML = ''; $('navQ').value = dest.name;
   $('navPreview').hidden = false;
+  $('navRange').innerHTML = '';
   $('navSummary').innerHTML = `<div class="muted sm">Calcul de l'itinéraire vers <b style="color:var(--ink)">${esc(dest.name)}</b>…</div>`;
   $('navGo').disabled = true;
   try{
@@ -2361,6 +2399,7 @@ async function planTo(dest){
         <div class="muted sm">arrivée vers ${eta}</div></div>
       <div class="muted xs" style="margin-top:4px">${esc(dest.name)}${dest.sub ? ' · ' + esc(dest.sub) : ''} · temps estimé avec ta vitesse moyenne (${fr(refSpeed(), 0)} km/h)</div>`;
     drawPreview(route, dest);
+    renderRouteRange(route, dest, min);
     const ready = !!trip || (connected() && !!currentBike);
     $('navGo').disabled = !ready;
     $('navGo').textContent = trip ? 'Démarrer le guidage' : 'Démarrer le trajet et le guidage';
@@ -2619,6 +2658,292 @@ async function backfillWeather(){
     try{ if (await fetchTemp(t)) n++; }catch(e){ break; }
   }
   if (n){ await loadTrips(); if (configured()) syncAll(); else invalidateTrips(); }
+}
+
+// ================= Vélo de référence (connecté, sinon le dernier utilisé) =================
+function homeBike(){
+  if (currentBike && bikeById(currentBike)) return currentBike;
+  const last = lsGet('fiido_lastdev', null), m = last && devMap[last.id];
+  if (m && bikeById(m)) return m;
+  const t = tripsCache.find(t => t.bikeId && bikeById(t.bikeId));
+  return t ? t.bikeId : (bikes[0] ? bikes[0].id : null);
+}
+// Niveau de batterie : en direct, sinon la dernière valeur connue du journal
+function knownSoc(id){
+  if (connected() && currentBike === id && num(state.soc) != null) return {soc: num(state.soc), live: true};
+  const log = bikeById(id)?.socLog || [], e = log[log.length - 1];
+  return e ? {soc: e.soc, t: e.t, live: false} : null;
+}
+function consFor(id, mode){
+  const list = tripsCache.filter(t => t.bikeId === id);
+  const mc = mode ? modeCons(list, mode) : null;
+  if (mc && mc.cons && mc.km >= 15) return {cons: mc.cons, label: `en ${mode}`, list};
+  const J = journalStats([id]);
+  if (J.cons) return {cons: J.cons, label: 'sur tes derniers paliers de batterie', list};
+  const all = modeCons(list, null);
+  if (all.cons) return {cons: all.cons, label: 'sur tes trajets', list};
+  return null;
+}
+function ago(t){
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 60 ? `il y a ${Math.max(1, m)} min` : m < 1440 ? `il y a ${Math.round(m/60)} h` : `il y a ${Math.round(m/1440)} j`;
+}
+
+// ================= Autonomie jusqu'à la destination =================
+const CLIMB_PCT_PER_M = 0.04;   // ≈ 0,22 Wh par mètre de montée fourni par le moteur (100 kg), sur 557 Wh
+let rangeSeq = 0;
+async function routeElevation(coords){
+  const n = Math.min(90, Math.max(2, Math.ceil(coords.length / 2)));
+  const pts = Array.from({length: n}, (_, i) => coords[Math.round(i * (coords.length - 1) / (n - 1))]);
+  const r = await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${pts.map(p => p[0].toFixed(5)).join(',')}&longitude=${pts.map(p => p[1].toFixed(5)).join(',')}`);
+  if (!r.ok) throw new Error('altitude indisponible');
+  const el = (await r.json()).elevation || [];
+  let up = 0, down = 0, ref = el[0];
+  for (const e of el){ if (e - ref >= 3){ up += e - ref; ref = e; } else if (ref - e >= 3){ down += ref - e; ref = e; } }
+  return {up, down};
+}
+async function renderRouteRange(route, dest, min){
+  const seq = ++rangeSeq, id = homeBike();
+  const box = $('navRange');
+  const km = route.distance / 1000;
+  const ks = id ? knownSoc(id) : null, rc = id ? consFor(id, connected() ? state.gear : null) : null;
+  let elev = null; try{ elev = await routeElevation(route.coords); }catch(e){}
+  let wx = null; try{ wx = await getWx(); }catch(e){}
+  if (seq !== rangeSeq) return;
+  const arrive = Date.now() + min * 60000, h = wx ? wxAt(wx, arrive) : null;
+  const wxLine = h ? `À l'arrivée (${hhmm(arrive)}) : ${fr(h.temp, 0)} °C, ${wxLabel(h.code).toLowerCase()}${h.prob != null ? `, pluie ${h.prob} %` : ''}${h.gust >= 45 ? `, rafales ${Math.round(h.gust)} km/h` : ''}` : '';
+  if (!rc){
+    box.innerHTML = `<div class="rng"><b class="sm">Batterie</b><div class="muted xs">L'estimation sera disponible après une dizaine de km enregistrés : la batterie n'est mesurée que par paliers.${elev ? ` Dénivelé : +${Math.round(elev.up)} m / −${Math.round(elev.down)} m.` : ''}</div>${wxLine ? `<div class="muted xs">${esc(wxLine)}</div>` : ''}</div>`;
+    return;
+  }
+  const tf = tempFactor(h ? h.temp : null, rc.list), f = tf ? tf.f : 1;
+  const go = km * rc.cons * f + (elev ? elev.up * CLIMB_PCT_PER_M : 0);
+  const back = km * rc.cons * f + (elev ? elev.down * CLIMB_PCT_PER_M : 0);
+  let main, cls = '';
+  if (ks){
+    const atDest = ks.soc - go, atHome = atDest - back;
+    cls = atDest < 10 ? 'bad' : atHome < 10 ? 'warn' : '';
+    main = `<div class="row between" style="align-items:baseline"><b class="sm">Batterie</b><span class="muted xs">${ks.live ? 'maintenant' : 'dernière mesure ' + ago(ks.t)} : ${ks.soc} %</span></div>
+      <div class="row" style="gap:18px;align-items:baseline;flex-wrap:wrap">
+        <div><span class="big" style="font-size:24px">${Math.max(0, Math.round(atDest))}</span><span class="muted"> %</span> <span class="muted xs">à l'arrivée</span></div>
+        <div><span class="big" style="font-size:24px;color:${atHome < 10 ? 'var(--warn)' : 'inherit'}">${Math.max(0, Math.round(atHome))}</span><span class="muted"> %</span> <span class="muted xs">après le retour</span></div></div>
+      <div class="sm">${atDest < 10 ? '⚠ Batterie trop juste pour arriver : recharge avant de partir.' : atHome < 10 ? `⚠ L'aller passe, mais pas le retour : il manquerait environ ${Math.round(10 - atHome)} %. Prévois une recharge sur place.` : '✓ L\'aller-retour passe sans recharge.'}</div>`;
+  } else {
+    main = `<b class="sm">Batterie</b><div class="sm">Ce trajet consommera environ <b>${Math.round(go)} %</b> de batterie (${Math.round(go + back)} % aller-retour). Connecte le vélo pour comparer avec son niveau.</div>`;
+  }
+  box.innerHTML = `<div class="rng ${cls}">${main}
+    <div class="muted xs">Estimation : ${fr(rc.cons * f, 2)} %/km (${rc.label}${tf && Math.abs(f - 1) >= 0.05 ? `, corrigé pour le froid ${tf.phrase}` : ''})${elev ? ` · dénivelé +${Math.round(elev.up)} m / −${Math.round(elev.down)} m` : ''}. Le vélo n'indique sa batterie que par paliers : compte une marge.</div>
+    ${wxLine ? `<div class="muted xs">${esc(wxLine)}</div>` : ''}</div>`;
+}
+
+// ================= Météo avant de partir (Open-Meteo) =================
+const WX_TTL = 30 * 60000;
+let wxBusy = null;
+function hhmm(t){ return new Date(t).toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}); }
+function wxLabel(c){
+  return c == null ? '—' : c === 0 ? 'Ciel dégagé' : c <= 2 ? 'Peu nuageux' : c === 3 ? 'Couvert' : c <= 48 ? 'Brouillard' : c <= 57 ? 'Bruine'
+    : c <= 67 ? 'Pluie' : c <= 77 ? 'Neige' : c <= 82 ? 'Averses' : c <= 86 ? 'Averses de neige' : 'Orage';
+}
+function wxIcon(c, night){
+  const sun = night ? '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="#CBD5E1"/>' : '<circle cx="12" cy="12" r="5" fill="#FCD34D"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke="#FCD34D" stroke-width="2" stroke-linecap="round"/>';
+  const cloud = '<path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 11a3.5 3.5 0 0 0 1 7z" fill="#94A3B8"/>';
+  const drops = '<path d="M8 20l-1 2M12 20l-1 2M16 20l-1 2" stroke="#60A5FA" stroke-width="2" stroke-linecap="round"/>';
+  const inner = c == null ? '' : c === 0 ? sun : c <= 2 ? `<g transform="translate(-3 -3) scale(.8)">${sun}</g>` + cloud : c <= 48 ? cloud
+    : c >= 95 ? cloud + '<path d="M12 18l-2 4h3l-1 3" stroke="#FCD34D" stroke-width="2" fill="none" stroke-linecap="round"/>' : cloud.replace('18h', '16h') + drops;
+  return `<svg aria-hidden="true" width="44" height="44" viewBox="0 0 24 24">${inner}</svg>`;
+}
+async function getWx(force=false){
+  const c = lsGet('fiido_wx', null);
+  let p = fix || lastPos;
+  if (!p){ try{ p = await currentPosition(); }catch(e){ if (c) return c; throw e; } }
+  const near = c && haversine(c, p) < 5000;
+  if (!force && c && near && Date.now() - c.t < WX_TTL) return c;
+  if (!navigator.onLine){ if (c) return c; throw new Error('hors ligne'); }
+  if (wxBusy) return wxBusy;
+  wxBusy = (async () => {
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${p.lat.toFixed(2)}&longitude=${p.lon.toFixed(2)}`
+      + '&current=temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m,is_day'
+      + '&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_gusts_10m'
+      + '&daily=sunrise,sunset&timezone=UTC&forecast_days=3');
+    if (!r.ok) throw new Error('météo indisponible (' + r.status + ')');
+    const j = await r.json();
+    const ms = s => Date.parse(s + 'Z');
+    const w = { t: Date.now(), lat: p.lat, lon: p.lon,
+      now: { temp: j.current.temperature_2m, rain: j.current.precipitation, code: j.current.weather_code, wind: j.current.wind_speed_10m, gust: j.current.wind_gusts_10m, day: !!j.current.is_day },
+      hours: j.hourly.time.map((x, i) => ({ t: ms(x), temp: j.hourly.temperature_2m[i], prob: j.hourly.precipitation_probability[i], rain: j.hourly.precipitation[i],
+        code: j.hourly.weather_code[i], wind: j.hourly.wind_speed_10m[i], gust: j.hourly.wind_gusts_10m[i] })),
+      sun: j.daily.time.map((x, i) => ({ rise: ms(j.daily.sunrise[i]), set: ms(j.daily.sunset[i]) })) };
+    lsSet('fiido_wx', w);
+    return w;
+  })();
+  try{ return await wxBusy; } finally { wxBusy = null; }
+}
+function wxAt(w, t){ return w.hours.reduce((b, h) => Math.abs(h.t + 1800000 - t) < Math.abs(b.t + 1800000 - t) ? h : b, w.hours[0]); }
+// Alertes pour les heures à venir (à partir de « from », sur « span » heures)
+function wxAlerts(w, from, span){
+  const hs = w.hours.filter(h => h.t + 3600000 > from && h.t < from + span * 3600000), out = [];
+  const wet = hs.find(h => (h.prob ?? 0) >= 50 || h.rain >= 0.3);
+  if (from <= Date.now() + 60000 && w.now.rain > 0.1 && Date.now() - w.t < 3600000) out.push(['bad', 'Il pleut en ce moment.']);
+  else if (wet) out.push([wet.prob >= 70 || wet.rain >= 1 ? 'bad' : 'warn', `Pluie probable ${wet.t <= from ? 'dès maintenant' : 'vers ' + hhmm(wet.t)}${wet.prob != null ? ` (${wet.prob} %)` : ''}${wet.rain >= 0.3 ? `, ${fr(wet.rain, 1)} mm/h` : ''}.`]);
+  const tmin = Math.min(...hs.map(h => h.temp));
+  if (tmin <= 1) out.push(['bad', `Jusqu'à ${fr(tmin, 0)} °C : risque de verglas, surtout sur les ponts et les marquages.`]);
+  else if (tmin < 5){
+    const tf = tempFactor(tmin, tripsCache.filter(t => t.bikeId === homeBike()));
+    out.push(['warn', `Froid (${fr(tmin, 0)} °C) : ${tf && tf.f > 1.03 ? `autonomie réduite d'environ ${Math.round(100 - 100 / tf.f)} % d'après tes trajets` : 'l\'autonomie de la batterie baisse par temps froid'}.`]);
+  }
+  const gust = Math.max(...hs.map(h => h.gust || 0));
+  if (gust >= 45) out.push([gust >= 60 ? 'bad' : 'warn', `Rafales jusqu'à ${Math.round(gust)} km/h.`]);
+  const sun = w.sun.find(s => s.set > from - 3600000);
+  if (sun && sun.set > from && sun.set < from + span * 3600000) out.push(['warn', `Nuit à ${hhmm(sun.set)} : pense à l'éclairage.`]);
+  else if (sun && (from < sun.rise || from > sun.set)) out.push(['warn', 'Il fait nuit : pense à l\'éclairage.']);
+  if (!out.some(a => a[1].startsWith('Pluie') || a[1].startsWith('Il pleut'))) out.unshift(['ok', `Pas de pluie prévue d'ici ${hhmm(from + span * 3600000)}.`]);
+  return out;
+}
+// Départs habituels : même créneau (¼ h) au moins 3 fois en 8 semaines, semaine et week-end séparés
+function habitualSlots(){
+  const since = Date.now() - 56 * 864e5, n = {};
+  for (const t of tripsCache){
+    if (t.start < since) continue;
+    const d = new Date(t.start), we = d.getDay() === 0 || d.getDay() === 6;
+    const q = Math.round((d.getHours() * 60 + d.getMinutes()) / 15);
+    for (const k of [q - 1, q, q + 1]) n[(we ? 'we' : 'wd') + k] = (n[(we ? 'we' : 'wd') + k] || 0) + (k === q ? 1 : 0.5);
+  }
+  return n;
+}
+function nextHabitual(){
+  const n = habitualSlots(), now = new Date();
+  const start = new Date(now); start.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0);
+  for (let i = 4; i < 96; i++){            // de +1 h à +24 h
+    const d = new Date(start.getTime() + i * 900000), we = d.getDay() === 0 || d.getDay() === 6;
+    const q = Math.round((d.getHours() * 60 + d.getMinutes()) / 15), k = (we ? 'we' : 'wd') + q;
+    if ((n[k] || 0) >= 3 && (n[k] >= (n[(we ? 'we' : 'wd') + (q - 1)] || 0)) && (n[k] >= (n[(we ? 'we' : 'wd') + (q + 1)] || 0))) return d.getTime();
+  }
+  return null;
+}
+async function renderWx(force=false){
+  const box = $('wxCard'); if (!box || trip) return;
+  let w = lsGet('fiido_wx', null);
+  if (w) drawWx(w);
+  try{ const n = await getWx(force); if (n !== w || !box.innerHTML) drawWx(n); }
+  catch(e){ if (!w) box.innerHTML = ''; }
+}
+function drawWx(w){
+  const now = Date.now(), old = now - w.t > 3 * 3600000;
+  const cur = old ? wxAt(w, now) : w.now, day = w.sun.find(s => s.set > now - 864e5 && s.rise < now + 864e5);
+  const night = day ? (now < day.rise || now > day.set) : !w.now.day;
+  const alerts = wxAlerts(w, now, 3).map(([c, txt]) => `<div class="wxal ${c}"><i></i><span>${esc(txt)}</span></div>`).join('');
+  const nh = nextHabitual();
+  let habit = '';
+  if (nh){
+    const h = wxAt(w, nh), d = new Date(nh), tomorrow = d.toDateString() !== new Date().toDateString();
+    const al = wxAlerts(w, nh, 1).filter(a => a[0] !== 'ok' && !/^Froid|^Il fait nuit/.test(a[1])).map(a => a[1].replace(/\.$/, '').replace(/^./, c => c.toLowerCase())).join(' · ');
+    habit = `<div class="muted xs" style="border-top:1px solid var(--line);padding-top:8px"><b style="color:var(--ink2)">${tomorrow ? 'Demain' : 'Aujourd\'hui'} ${hhmm(nh)}</b> (ton départ habituel) : ${fr(h.temp, 0)} °C, ${wxLabel(h.code).toLowerCase()}${h.prob != null ? `, pluie ${h.prob} %` : ''}${al ? ' · ' + esc(al) : ''}</div>`;
+  }
+  $('wxCard').innerHTML = `<div class="card wx">
+    <div class="row between"><h3>Météo</h3><button class="link xs" id="wxRefresh">${old ? '⚠ ' : ''}Mise à jour ${hhmm(w.t)}</button></div>
+    <div class="wxnow">${wxIcon(cur.code, night)}<div><div class="big" style="font-size:28px">${fr(cur.temp, 0)} °C</div>
+      <div class="muted xs">${wxLabel(cur.code)} · vent ${Math.round(cur.wind)} km/h${cur.gust >= 25 ? `, rafales ${Math.round(cur.gust)}` : ''}</div></div></div>
+    ${alerts}${habit}</div>`;
+  $('wxRefresh').onclick = () => renderWx(true);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && screen === 'ride' && !trip) renderWx(); });
+
+// ================= Entretien =================
+const MAINT_DEFAULTS = [
+  {id: 'chain',  name: 'Nettoyer et graisser la chaîne',             km: 300},
+  {id: 'tyres',  name: 'Vérifier la pression des pneus',             days: 14},
+  {id: 'brakes', name: 'Contrôler les plaquettes de frein',          km: 1000},
+  {id: 'bolts',  name: 'Vérifier les serrages (vis, rayons, guidon)', km: 1000},
+  {id: 'service',name: 'Révision complète en atelier',               km: 3000, days: 365},
+];
+let maintDueAtStart = new Set(), maintEdit = null, maintBike = null;
+// Les rappels démarrent au kilométrage actuel du vélo la première fois
+function maintItems(b){
+  if (!b) return [];
+  if (!b.maint){
+    if (b.lastOdo == null) return [];
+    b.maint = MAINT_DEFAULTS.map(d => ({...d, lastOdo: b.lastOdo, lastT: Date.now(), updatedAt: 0}));
+    lsSet('fiido_bikes', bikes);
+  }
+  return b.maint.filter(x => !x.deleted);
+}
+function maintStatus(x, b){
+  const odo = b && b.lastOdo != null ? b.lastOdo : x.lastOdo;
+  const kmUsed = x.km ? Math.max(0, odo - x.lastOdo) : null, daysUsed = x.days ? (Date.now() - x.lastT) / 864e5 : null;
+  const pk = x.km ? kmUsed / x.km : 0, pd = x.days ? daysUsed / x.days : 0, p = Math.max(pk, pd);
+  const byKm = pk >= pd;
+  const left = byKm ? x.km - kmUsed : x.days - daysUsed;
+  const txt = p >= 1 ? (byKm ? `dépassé de ${Math.round(-left)} km` : `en retard de ${Math.round(-left)} j`)
+                     : (byKm ? `dans ${Math.round(left)} km` : left < 1.5 ? 'demain' : `dans ${Math.round(left)} j`);
+  return {p, due: p >= 1, soon: p >= 0.85, txt, used: byKm ? `${Math.round(kmUsed)} / ${x.km} km` : `${Math.floor(daysUsed)} / ${x.days} j`};
+}
+function maintDone(bikeId, itemId){
+  const b = bikeById(bikeId), x = b && (b.maint || []).find(m => m.id === itemId); if (!x) return;
+  x.lastOdo = b.lastOdo ?? x.lastOdo; x.lastT = Date.now(); x.updatedAt = Date.now();
+  vibrate(40); storeBikes(); renderMaintCard(); if (screen === 'settings') renderMaintSettings(); syncAll();
+}
+function renderMaintCard(){
+  const id = homeBike(), b = bikeById(id), box = $('maintCard'); if (!box) return;
+  const due = maintItems(b).map(x => ({x, s: maintStatus(x, b)})).filter(o => o.s.soon).sort((a, c) => c.s.p - a.s.p);
+  box.innerHTML = due.length ? `<div class="card" style="display:flex;flex-direction:column;gap:8px">
+      <div class="row between"><h3>Entretien</h3><span class="muted xs">${bikes.length > 1 ? esc(b.name) : ''}</span></div>
+      ${due.map(({x, s}) => `<div class="row between" style="gap:10px"><div style="min-width:0"><div class="sm">${esc(x.name)}</div>
+        <div class="xs" style="color:${s.due ? 'var(--badt)' : '#FCD34D'}">${s.txt}</div></div>
+        <button class="btn" data-mdone="${esc(x.id)}">Fait</button></div>`).join('')}</div>` : '';
+  box.onclick = e => { const btn = e.target.closest('[data-mdone]'); if (btn) maintDone(id, btn.dataset.mdone); };
+}
+function renderMaintSettings(){
+  const box = $('maintSettings'); if (!box) return;
+  if (!bikes.length){ box.innerHTML = '<div class="muted sm">Les rappels apparaîtront après la première connexion à un vélo.</div>'; return; }
+  if (!maintBike || !bikeById(maintBike)) maintBike = homeBike();
+  const b = bikeById(maintBike), items = maintItems(b);
+  const sel = bikes.length > 1 ? `<select id="maintBikeSel" aria-label="Vélo">${bikes.map(x => `<option value="${esc(x.id)}"${x.id === maintBike ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : '';
+  const row = x => {
+    const s = maintStatus(x, b);
+    if (maintEdit === x.id) return `<div class="mt">
+      <label for="meName" style="margin:0">Rappel</label><input id="meName" value="${esc(x.name)}" maxlength="60">
+      <div class="mtedit"><div><label for="meKm" style="margin:0">Tous les … km</label><input id="meKm" type="number" min="0" step="50" inputmode="numeric" value="${x.km || ''}" placeholder="—"></div>
+        <div><label for="meDays" style="margin:0">ou tous les … jours</label><input id="meDays" type="number" min="0" step="1" inputmode="numeric" value="${x.days || ''}" placeholder="—"></div></div>
+      <div class="row" style="gap:8px;justify-content:space-between"><button class="btn danger" data-mdel="${esc(x.id)}">Supprimer</button>
+        <span class="row" style="gap:8px"><button class="btn" data-mcancel="1">Annuler</button><button class="btn primary" data-msave="${esc(x.id)}">Enregistrer</button></span></div></div>`;
+    return `<div class="mt"><div class="row between" style="gap:8px"><div style="min-width:0"><div class="sm">${esc(x.name)}</div>
+        <div class="muted xs">${[x.km ? `tous les ${x.km} km` : '', x.days ? `tous les ${x.days} j` : ''].filter(Boolean).join(' ou ')} · ${s.used} · <span style="color:${s.due ? 'var(--badt)' : s.soon ? '#FCD34D' : 'inherit'}">${s.txt}</span></div></div>
+        <span class="row" style="gap:4px;flex:none"><button class="btn" data-mdone="${esc(x.id)}">Fait</button><button class="btn" data-medit="${esc(x.id)}" aria-label="Modifier ${esc(x.name)}">✎</button></span></div>
+      <div class="hbar"><i class="${s.due ? 'bad' : s.soon ? 'warn' : ''}" style="width:${Math.min(100, Math.round(100 * s.p))}%"></i></div></div>`;
+  };
+  box.innerHTML = `${sel}${!b || b.lastOdo == null ? '<div class="muted sm">Connecte ce vélo une fois pour lire son compteur : les rappels partiront de ce kilométrage.</div>'
+      : (items.length ? items.map(row).join('') : '<div class="muted sm">Aucun rappel.</div>') + `<button class="btn wide" id="maintAdd" style="margin-top:10px">Ajouter un rappel</button>
+      <div class="muted xs" style="margin-top:8px">« Fait » remet le compteur à zéro au kilométrage actuel. Les rappels proches s'affichent sur l'écran Rouler, et une notification te prévient à la fin d'un trajet.</div>`}`;
+  if ($('maintBikeSel')) $('maintBikeSel').onchange = e => { maintBike = e.target.value; maintEdit = null; renderMaintSettings(); };
+  if ($('maintAdd')) $('maintAdd').onclick = () => {
+    const x = {id: 'm' + Date.now().toString(36), name: 'Nouveau rappel', km: 500, lastOdo: b.lastOdo, lastT: Date.now(), updatedAt: Date.now()};
+    b.maint.push(x); maintEdit = x.id; storeBikes(); renderMaintSettings(); setTimeout(() => { $('meName').focus(); $('meName').select(); }, 30);
+  };
+  box.onclick = e => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    if (btn.dataset.mcancel){ maintEdit = null; return renderMaintSettings(); }
+    const x = (b.maint || []).find(m => m.id === (btn.dataset.mdone || btn.dataset.medit || btn.dataset.msave || btn.dataset.mdel));
+    if (!x) return;
+    if (btn.dataset.mdone) return maintDone(b.id, x.id);
+    if (btn.dataset.medit){ maintEdit = x.id; return renderMaintSettings(); }
+    if (btn.dataset.mdel){ if (!confirm(`Supprimer le rappel « ${x.name} » ?`)) return; x.deleted = true; }
+    if (btn.dataset.msave){
+      const km = parseInt($('meKm').value, 10), days = parseInt($('meDays').value, 10);
+      if (!(km > 0) && !(days > 0)){ alert('Indique un nombre de km, de jours, ou les deux.'); return; }
+      x.name = $('meName').value.trim().slice(0, 60) || x.name; x.km = km > 0 ? km : undefined; x.days = days > 0 ? days : undefined;
+    }
+    x.updatedAt = Date.now(); maintEdit = null; storeBikes(); renderMaintSettings(); renderMaintCard(); syncAll();
+  };
+}
+// Fin de trajet : notification pour les rappels devenus dus pendant ce trajet
+function maintAfterTrip(t){
+  const b = bikeById(t.bikeId); if (!b) return;
+  const fresh = maintItems(b).filter(x => maintStatus(x, b).due && !maintDueAtStart.has(x.id));
+  maintDueAtStart = new Set();
+  if (!fresh.length) return;
+  const body = fresh.map(x => x.name).join(' · ');
+  log('Entretien à faire : ' + body);
+  if (NATIVE) Cap.nativePromise('LocalNotifications', 'schedule', {notifications: [{id: 43, title: 'Entretien à faire', body}]}).catch(e => log('Notification : ' + (e.message || e)));
 }
 
 // ================= Exports =================

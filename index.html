@@ -538,8 +538,8 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.14 bêta';
-const APP_DATE = '22 novembre 2026';
+const APP_VERSION = '0.14.1 bêta';
+const APP_DATE = '23 novembre 2026';
 
 const $ = id => document.getElementById(id);
 $('verChip').textContent = 'v' + APP_VERSION;
@@ -1032,9 +1032,9 @@ function logSoc(){
   if (b.socLog.length > 2000) b.socLog.splice(0, b.socLog.length - 2000);
   lsSet('fiido_bikes', bikes);
 }
-// Une recharge : hausse d'au moins 20 %, ou hausse jusqu'à 95-100 %.
-// Les petites hausses sont des remontées de tension au repos, pas des recharges.
-const isCharge = (a, b) => b.soc - a.soc >= 20 || (b.soc >= 95 && b.soc - a.soc >= 10);
+// Une recharge : hausse d'au moins 40 % (deux paliers), ou hausse jusqu'à 95-100 %.
+// Une remontée d'un palier (ex. 30 → 50 % après une pause) est un rebond de tension au repos, pas une recharge.
+const isCharge = (a, b) => b.soc - a.soc >= 40 || (b.soc >= 95 && b.soc - a.soc >= 10);
 function chargeEvents(log){
   const out = []; let lastCharge = null;
   (log || []).forEach((e, i) => {

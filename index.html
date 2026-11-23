@@ -100,6 +100,14 @@ body.cockpit .tabbar{display:none}
 .bars10 span{border-radius:3px;background:var(--line)}.bars10 span.on{background:var(--accent)}.bars10.low span.on{background:var(--warn)}
 .cmap{position:relative;flex:1;min-height:150px;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#12171A}
 #map{position:absolute;inset:0}
+.cmap #map{inset:auto;left:50%;top:50%;width:var(--d,100%);height:var(--d,100%);transform:translate(-50%,-50%) rotate(var(--rot,0deg));transition:transform .7s ease-out}
+.cmap #map.snap{transition:none}
+.cmap .iconbtn.compass{top:62px}
+.cmap .compass svg{transition:transform .7s ease-out}
+.cmap .compass.on{border-color:var(--accent);color:var(--accent)}
+.osmattr{position:absolute;right:6px;bottom:4px;z-index:500;font-size:10px;color:var(--muted);background:#0B0E10B0;padding:1px 5px;border-radius:6px;pointer-events:none}
+.mearrow{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
+.mearrow svg{transition:transform .5s ease-out;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}
 .cmap .iconbtn{position:absolute;right:10px;top:10px;z-index:500;background:#151A1ECC}
 .stop{position:relative;overflow:hidden;height:64px;border-radius:18px;border:2px solid var(--bad);background:#2A1416;color:var(--badt);font-size:16px;font-weight:600;touch-action:none;user-select:none;-webkit-user-select:none}
 .stop .fill{position:absolute;left:0;top:0;bottom:0;width:0;background:#7F1D1D}
@@ -313,6 +321,8 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
       <button class="iconbtn navbtn" id="btnNavCockpit" aria-label="Choisir une destination">
         <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-8-8 18-2-8z"></path></svg>
       </button>
+      <button class="iconbtn compass" id="btnCompass" aria-label="Orientation de la carte"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24"><path d="M12 2l4 10h-8z" fill="#EF4444"/><path d="M12 22l-4-10h8z" fill="currentColor"/></svg></button>
+      <span class="osmattr">© OpenStreetMap</span>
       <button class="iconbtn" id="btnFollow" aria-label="Recentrer la carte sur ma position">
         <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path></svg>
       </button>
@@ -538,7 +548,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.14.1 bêta';
+const APP_VERSION = '0.15 bêta';
 const APP_DATE = '23 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -603,7 +613,7 @@ function showScreen(name){
   document.querySelectorAll('.tabbar button').forEach(b => b.classList.toggle('on', b.dataset.tab === navName));
   document.querySelectorAll('.scr').forEach(s => s.classList.toggle('on', s.id === 'scr-' + real));
   $('tripBanner').classList.toggle('on', !!trip && real !== 'cockpit');
-  if (real === 'cockpit' && map) setTimeout(() => map.invalidateSize(), 60);
+  if (real === 'cockpit' && map) setTimeout(() => { sizeMap(); map.invalidateSize(); if (follow && fix) map.panTo(lookAhead(fix)); }, 60);
   if (name === 'history') renderHistory();
   if (name === 'stats') renderStats();
   if (name === 'ride') renderRide();
@@ -929,7 +939,7 @@ async function startGps(){
       }
       if (!loc) return;
       onFix({timestamp: loc.time || Date.now(), coords: {latitude: loc.latitude, longitude: loc.longitude,
-        accuracy: loc.accuracy ?? 99, altitude: loc.altitude, speed: loc.speed}});
+        accuracy: loc.accuracy ?? 99, altitude: loc.altitude, speed: loc.speed, heading: loc.bearing}});
       // écran éteint, les minuteries de la page ralentissent : chaque position GPS relance la lecture
       // du vélo, la reconnexion et la surveillance
       heartbeat();
@@ -951,6 +961,7 @@ function onFix(pos){
   const c = pos.coords;
   fix = {t:pos.timestamp, lat:c.latitude, lon:c.longitude, acc:c.accuracy, ele:c.altitude, gspeed:c.speed};
   $('cGps').textContent = `GPS · ${Math.round(c.accuracy)} m`;
+  updateHeading(fix, c.heading);
   showOnMap(fix);
   rememberPos(fix);
   if (nav) navOnFix(fix);
@@ -970,11 +981,16 @@ function onFix(pos){
 let map=null, line=null, marker=null, follow=true;
 function ensureMap(){
   if (map || !window.L) return !!map;
-  map = L.map('map', {zoomControl:false, attributionControl:true});
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(map);
+  sizeMap();
+  map = L.map('map', {zoomControl:false, attributionControl:false});
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);
   line = L.polyline([], {color:'#2DD4BF', weight:5}).addTo(map);
-  marker = L.circleMarker([0,0], {radius:8, color:'#fff', weight:3, fillColor:'#60A5FA', fillOpacity:1});
-  map.on('dragstart', () => { follow=false; });
+  marker = L.marker([0,0], {interactive:false, zIndexOffset:1000, icon: L.divIcon({className:'', iconSize:[34,34], iconAnchor:[17,17],
+    html:'<div class="mearrow"><svg id="meArrow" width="30" height="30" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#60A5FA" stroke="#fff" stroke-width="2.5"/><path d="M12 5.5l4.5 11-4.5-2.6-4.5 2.6z" fill="#fff"/></svg></div>'})});
+  map.on('dragstart', () => { setFollow(false); });
+  // toucher la carte tournée : on la remet au nord tout de suite, sinon le glisser partirait de travers
+  $('map').parentElement.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; if (rotActive()){ setFollow(false, true); } }, true);
+  window.addEventListener('resize', () => { if (map){ sizeMap(); map.invalidateSize(); } });
   // appui long (ou clic droit) sur la carte : choisir ce point comme destination
   map.on('contextmenu', e => { vibrate(30); openNavSheet(); openPick({lat: e.latlng.lat, lon: e.latlng.lng}); });
   map.setView([45.76, 4.84], 13);
@@ -984,9 +1000,59 @@ function showOnMap(f){
   if (!ensureMap()) return;
   if (!map.hasLayer(marker)) { marker.addTo(map); map.setView([f.lat,f.lon], 16); }
   marker.setLatLng([f.lat, f.lon]);
-  if (follow) map.panTo([f.lat, f.lon], {animate:true});
+  if (follow) map.panTo(lookAhead(f), {animate:true});
 }
-$('btnFollow').onclick = () => { follow=true; if (fix && map) map.setView([fix.lat,fix.lon], Math.max(map.getZoom(),16)); };
+$('btnFollow').onclick = () => { setFollow(true); if (fix && map) map.setView(lookAhead(fix), Math.max(map.getZoom(),16)); };
+
+// ---- Carte orientée dans le sens de la marche
+// La carte est un carré de la taille de la diagonale, centré et tourné en CSS : pas de coin vide en tournant.
+let headUp = lsGet('fiido_headup', true), heading = null, prevFixH = null, shownRot = 0;
+function sizeMap(){
+  const c = $('map').parentElement, w = c.clientWidth || 390, h = c.clientHeight || 400;
+  c.style.setProperty('--d', Math.ceil(Math.hypot(w, h)) + 'px');
+}
+const rotActive = () => headUp && follow && heading != null;
+// Cap : celui du GPS quand on roule (> 5 km/h), sinon calculé entre deux positions distantes de 12 m
+function updateHeading(f, gpsHeading){
+  const v = f.gspeed != null ? f.gspeed * 3.6 : null;
+  let h = null;
+  if (gpsHeading != null && !isNaN(gpsHeading) && v != null && v > 5) h = gpsHeading;
+  else if (prevFixH && haversine(prevFixH, f) >= 12 && (v == null || v > 3)) h = bearing(prevFixH, f);
+  if (!prevFixH || haversine(prevFixH, f) >= 12) prevFixH = f;
+  if (h == null) return;
+  heading = h; applyRotation();
+}
+function bearing(a, b){
+  const r = Math.PI / 180, y = Math.sin((b.lon - a.lon) * r) * Math.cos(b.lat * r);
+  const x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lon - a.lon) * r);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+function applyRotation(snap=false){
+  const m = $('map'); if (!m) return;
+  const target = rotActive() ? -heading : 0;
+  shownRot += ((target - shownRot) % 360 + 540) % 360 - 180;     // plus court chemin, sans tour complet
+  m.classList.toggle('snap', snap); if (snap) void m.offsetWidth;
+  m.parentElement.style.setProperty('--rot', shownRot + 'deg');
+  if (snap) requestAnimationFrame(() => m.classList.remove('snap'));
+  // la flèche indique toujours le cap réel ; la boussole indique le nord
+  const a = document.getElementById('meArrow'); if (a) a.style.transform = `rotate(${heading ?? 0}deg)`;
+  const cb = $('btnCompass'); cb.querySelector('svg').style.transform = `rotate(${shownRot}deg)`;
+  cb.classList.toggle('on', headUp);
+  cb.setAttribute('aria-label', headUp ? 'Carte orientée dans le sens de la marche : toucher pour mettre le nord en haut' : 'Nord en haut : toucher pour orienter la carte dans le sens de la marche');
+}
+function setFollow(on, snap=false){ follow = on; applyRotation(snap); }
+// Centre de la carte un peu devant le vélo quand la carte tourne : on voit plus de route devant soi
+function lookAhead(f){
+  if (!map || !rotActive()) return [f.lat, f.lon];
+  const z = map.getZoom(), p = map.project([f.lat, f.lon], z), k = 0.22 * $('map').parentElement.clientHeight, r = heading * Math.PI / 180;
+  return map.unproject(p.add([Math.sin(r) * k, -Math.cos(r) * k]), z);
+}
+$('btnCompass').onclick = () => {
+  headUp = !headUp; lsSet('fiido_headup', headUp);
+  if (headUp) follow = true;
+  applyRotation();
+  if (fix && map) map.panTo(lookAhead(fix), {animate:true});
+};
 
 // ================= Écran toujours allumé =================
 let wakeLock=null;
@@ -1264,7 +1330,7 @@ function startTrip(){
            socStart:num(state.soc), odoStart:num(state.total), inProgress:true, appVersion:APP_VERSION, bikeId:currentBike };
   banner('recovered', '');
   if (line) line.setLatLngs([]);
-  follow = true;
+  setFollow(true);
   startGps(); keepAwake(); vibrate(80);
   tripClock = setInterval(updateCockpit, 1000);
   cockpitOpen = true;
@@ -2541,7 +2607,7 @@ function startNav(dest, route){
   ensureMap();
   if (map && !navLayer){ navLayer = L.layerGroup().addTo(map); }
   drawNavRoute();
-  follow = true;
+  setFollow(true);
   if (fix) navOnFix(fix); else renderNav();
   vibrate(60);
   log('Guidage vers ' + dest.name);

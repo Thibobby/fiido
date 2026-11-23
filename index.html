@@ -96,6 +96,13 @@ body.cockpit .tabbar{display:none}
 .seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;background:var(--s1);border:1px solid var(--line);border-radius:14px;padding:5px}
 .seg div{text-align:center;padding:9px 0;border-radius:10px;font-weight:500;color:var(--muted)}
 .seg div.on{background:var(--accent);color:#0B0E10;font-weight:700}
+.seg button{all:unset;box-sizing:border-box;text-align:center;padding:9px 0;min-height:42px;border-radius:10px;font-weight:500;color:var(--muted);cursor:pointer}
+.seg button.on{background:var(--accent);color:#0B0E10;font-weight:700}
+.seg button.wait{outline:2px dashed var(--accent);outline-offset:-3px}
+.seg button:disabled{opacity:.45;cursor:default}
+.seg.ctl{grid-template-columns:repeat(3,minmax(0,1fr)) 60px}
+.seg .lightbtn{display:flex;align-items:center;justify-content:center}
+.seg .lightbtn.on{background:#FCD34D;color:#0B0E10}
 .bars10{flex:1;display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:4px;height:22px}
 .bars10 span{border-radius:3px;background:var(--line)}.bars10 span.on{background:var(--accent)}.bars10.low span.on{background:var(--warn)}
 .cmap{position:relative;flex:1;min-height:150px;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#12171A}
@@ -253,6 +260,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
           <div class="tile s2"><div class="d" style="margin:0">Éclairage</div><div style="font-weight:600;margin-top:2px" id="rLight">—</div></div>
           <div class="tile s2"><div class="d" style="margin:0">Limiteur</div><div style="font-weight:600;margin-top:2px" id="rLimit">—</div></div>
         </div>
+        <div class="seg ctl" id="rCtl" role="group" aria-label="Pilotage du vélo"><button data-g="1">Éco</button><button data-g="2">Sport</button><button data-g="3">Turbo</button><button class="lightbtn" data-light="1" aria-label="Éclairage"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg></button></div>
         <div class="row wrap" style="gap:4px 14px;margin:-6px 0 -10px">
           <button class="link" id="btnRename">Renommer</button>
           <button class="link" id="btnChangeBike">Ce n'est pas ce vélo</button>
@@ -303,7 +311,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
     </div>
     <div class="navsub" id="navSub"></div>
     <div class="speed"><div class="n" id="cSpeed">0,0</div><div class="u">KM/H</div></div>
-    <div class="seg" id="cGears"><div data-g="Éco">Éco</div><div data-g="Sport">Sport</div><div data-g="Turbo">Turbo</div></div>
+    <div class="seg ctl" id="cGears" role="group" aria-label="Pilotage du vélo"><button data-g="1">Éco</button><button data-g="2">Sport</button><button data-g="3">Turbo</button><button class="lightbtn" data-light="1" aria-label="Éclairage"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg></button></div>
     <div class="card" style="display:flex;flex-direction:column;gap:10px">
       <div class="row between"><span class="muted xs" style="text-transform:uppercase;letter-spacing:.06em">Batterie</span><span class="muted sm" id="cRange"></span></div>
       <div class="row" style="gap:14px">
@@ -548,7 +556,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.15 bêta';
+const APP_VERSION = '0.16 bêta';
 const APP_DATE = '23 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -661,6 +669,7 @@ const Cap = window.Capacitor;
 const NATIVE = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
 const hexToBytes = h => new Uint8Array((String(h).match(/[0-9a-f]{2}/gi) || []).map(x => parseInt(x, 16)));
 
+let raw26 = null, raw27 = null, rawAt = 0, ctlPending = null;   // état brut du vélo pour le pilotage
 let device=null, busy=false, lastFrameAt=0, lastReconnTry=0, lostAt=null, lostNotified=false, buf=[], manualDisconnect=false, connState='off', lastPoll=0, autoInfo='', connecting=false;
 const rawFrames = {};
 const connected = () => !!(device && device.connected);
@@ -889,6 +898,7 @@ function handle(f){
     const g = p[0x26-5];
     show('gear',  GEARS3[g] ?? ('niveau '+g));
     const flags = p[0x27-5];
+    raw27 = flags; raw26 = g; rawAt = Date.now(); onCtlState();
     show('motor', (flags & 0x80) ? 'Assiste' : 'En pause');
     show('light', (flags & 0x08) ? 'Allumé' : 'Éteint');
     show('limit', (flags & 0x20) ? 'Actif' : 'Inactif');
@@ -1291,6 +1301,7 @@ function renderRide(){
   $('btnStart').disabled = !canStart;
   $('startHint').textContent = !connected() ? "Connectez d'abord le vélo." : !currentBike ? 'Identifiez le vélo pour démarrer.' : 'Le GPS démarrera avec le trajet.';
   updateLive();
+  renderCtl();
   renderLastTrip();
   renderMaintCard();
   renderWx();
@@ -1415,7 +1426,7 @@ function updateCockpit(){
   $('cBars').classList.toggle('low', soc != null && soc <= 20);
   const r = rangeKm();
   $('cRange').innerHTML = r ? `≈ <b style="color:var(--ink)">${Math.round(r.km)} km</b> restants` : '';
-  document.querySelectorAll('#cGears div').forEach(d => d.classList.toggle('on', d.dataset.g === state.gear));
+  renderCtl();
   $('tbInfo').textContent = `${fr(s.dist)} km · ${fmtDur(s.dur)}`;
 }
 
@@ -2725,6 +2736,79 @@ async function backfillWeather(){
   }
   if (n){ await loadTrips(); if (configured()) syncAll(); else invalidateTrips(); }
 }
+
+// ================= Pilotage du vélo =================
+// Commandes relevées le 23/11/2026 en capturant l'app officielle (journal HCI Bluetooth) :
+//   écriture = 46 64 AA 01 <registre> <valeur> <xor>
+//   registre 0x26 = niveau d'assistance (1 Éco, 2 Sport, 3 Turbo)
+//   registre 0x27 = indicateurs ; bit 0x08 = éclairage (les autres bits sont recopiés tels quels)
+// Sécurité : seuls ces deux registres peuvent être écrits ; la limite de vitesse et l'accélérateur ne sont jamais touchés.
+const CTL_ALLOWED = {0x26: v => v >= 1 && v <= 3, 0x27: v => true};
+function wframe(reg, val){
+  if (!CTL_ALLOWED[reg] || !CTL_ALLOWED[reg](val)) throw new Error('commande refusée');
+  const f = [0x46, 0x64, 0xAA, 0x01, reg, val]; f.push(xor(f)); return new Uint8Array(f);
+}
+async function ctlSend(reg, val, check, label){
+  if (!connected()) return ctlFail('Vélo non connecté.');
+  if (ctlPending) return;
+  if (raw27 == null || Date.now() - rawAt > 6000) return ctlFail('État du vélo inconnu : attends une seconde et réessaie.');
+  ctlPending = {reg, val, check, label, t: Date.now()};
+  renderCtl();
+  const t0 = Date.now();
+  while (busy && Date.now() - t0 < 1500) await sleep(40);       // ne pas couper une lecture en cours
+  busy = true;
+  try{
+    await send(wframe(reg, val)); log(`Commande : ${label}`);
+    if (!NATIVE) await sleep(120);
+    await send(ROTATION[0]);                                       // relit l'état tout de suite
+  }catch(e){ ctlPending = null; busy = false; renderCtl(); return ctlFail('Envoi impossible : ' + (e.message || e)); }
+  busy = false; vibrate(25);
+  const p = ctlPending;
+  setTimeout(() => { if (ctlPending === p){ ctlPending = null; renderCtl(); ctlFail(`Le vélo n'a pas confirmé : ${label}.`); } }, 4000);
+}
+function onCtlState(){
+  if (ctlPending && ctlPending.check()){ log(`Confirmé : ${ctlPending.label}`); ctlPending = null; }
+  renderCtl();
+}
+function ctlFail(msg){
+  log(msg);
+  const el = banner('ctlBanner', `<span>${esc(msg)}</span><button class="btn" id="ctlOk">OK</button>`);
+  if (el) $('ctlOk').onclick = () => banner('ctlBanner', '');
+  setTimeout(() => banner('ctlBanner', ''), 6000);
+}
+function setGear(n){
+  if (raw26 === n) return;
+  ctlSend(0x26, n, () => raw26 === n, `assistance ${GEARS3[n]}`);
+}
+function setLight(on){
+  const v = on ? (raw27 | 0x08) : (raw27 & ~0x08);
+  if (((v ^ raw27) & ~0x08) !== 0) return;                        // garde-fou : seul le bit éclairage change
+  ctlSend(0x27, v, () => !!(raw27 & 0x08) === on, on ? 'éclairage allumé' : 'éclairage éteint');
+}
+function renderCtl(){
+  const ok = connected() && raw27 != null && Date.now() - rawAt < 6000;
+  for (const id of ['cGears', 'rCtl']){
+    const box = $(id); if (!box) continue;
+    box.querySelectorAll('button[data-g]').forEach(b => {
+      const g = +b.dataset.g;
+      b.classList.toggle('on', raw26 === g && ok);
+      b.classList.toggle('wait', !!ctlPending && ctlPending.reg === 0x26 && ctlPending.val === g);
+      b.disabled = !ok || !!ctlPending;
+      b.setAttribute('aria-pressed', raw26 === g && ok ? 'true' : 'false');
+    });
+    const l = box.querySelector('[data-light]');
+    const lit = ok && !!(raw27 & 0x08);
+    l.classList.toggle('on', lit); l.classList.toggle('wait', !!ctlPending && ctlPending.reg === 0x27);
+    l.disabled = !ok || !!ctlPending;
+    l.setAttribute('aria-pressed', lit ? 'true' : 'false');
+    l.setAttribute('aria-label', lit ? 'Éteindre l’éclairage' : 'Allumer l’éclairage');
+  }
+}
+for (const id of ['cGears', 'rCtl']) $(id).addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || b.disabled) return;
+  if (b.dataset.g) setGear(+b.dataset.g);
+  else if (b.dataset.light) setLight(!(raw27 & 0x08));
+});
 
 // ================= Vélo de référence (connecté, sinon le dernier utilisé) =================
 function homeBike(){

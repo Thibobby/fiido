@@ -562,7 +562,7 @@ footer{margin:10px 0 0;font-size:12px;color:var(--dim);text-align:center}
 
 <script>
 // ================= Version =================
-const APP_VERSION = '0.17 bêta';
+const APP_VERSION = '0.17.1 bêta';
 const APP_DATE = '26 novembre 2026';
 
 const $ = id => document.getElementById(id);
@@ -1513,7 +1513,39 @@ let tripsCache = [];
 async function loadTrips(){
   try{ tripsCache = (await dbAll()).filter(t=>!t.inProgress && t.summary).sort((a,b)=>b.start-a.start); }
   catch(e){ log('Lecture historique impossible : '+e.message); tripsCache = []; }
+  try{ backfillSocLogs(); }catch(e){ log('Journal de batterie : ' + e.message); }
   return tripsCache;
+}
+// Complète le journal de batterie avec les niveaux relevés pendant les trajets : utile pour les trajets
+// enregistrés avant l'existence du journal, ou rattachés depuis un vélo supprimé.
+let socBackfillKey = '';
+function backfillSocLogs(){
+  const key = tripsCache.length + '|' + bikes.map(b => b.id + ':' + (b.socLog || []).length).join(',');
+  if (key === socBackfillKey) return;
+  let changed = false;
+  for (const b of bikes){
+    const pts = [...(b.socLog || [])];
+    for (const t of tripsCache){
+      if (t.bikeId !== b.id) continue;
+      let last = null;
+      for (const r of t.rows || []){
+        const soc = num(r[2]), odo = num(r[4]), ts = Date.parse(r[0]);
+        if (soc == null || odo == null || isNaN(ts) || soc === last) continue;
+        pts.push({t: ts, odo, soc}); last = soc;
+      }
+    }
+    pts.sort((x, y) => x.t - y.t);
+    const out = [];
+    for (const e of pts){
+      const l = out[out.length - 1];
+      if (l && (l.soc === e.soc || e.odo < l.odo - 0.05)) continue;
+      out.push({t: e.t, odo: e.odo, soc: e.soc});
+    }
+    const trimmed = out.slice(-2000);
+    if (JSON.stringify(trimmed) !== JSON.stringify(b.socLog || [])){ b.socLog = trimmed; changed = true; }
+  }
+  if (changed) lsSet('fiido_bikes', bikes);
+  socBackfillKey = tripsCache.length + '|' + bikes.map(b => b.id + ':' + (b.socLog || []).length).join(',');
 }
 function invalidateTrips(){ loadTrips().then(() => { if (screen==='history') renderHistory(); if (screen==='stats') renderStats(); if (screen==='ride') renderRide(); }); }
 
